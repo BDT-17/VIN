@@ -1,0 +1,1288 @@
+\documentclass[12pt,a4paper]{article}
+
+% =========================================================
+% Packages
+% =========================================================
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[top=2.5cm, bottom=2.5cm, left=3cm, right=2.5cm]{geometry}
+
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{float}
+\usepackage{parskip}
+\usepackage{longtable}
+\usepackage{multirow}
+
+% =========================================================
+% Colors
+% =========================================================
+\definecolor{primaryblue}{RGB}{31,78,121}
+\definecolor{codeblue}{RGB}{0,114,178}
+\definecolor{codegray}{RGB}{245,245,245}
+\definecolor{commentgreen}{RGB}{40,160,40}
+\definecolor{stringred}{RGB}{180,0,0}
+
+% =========================================================
+% Hyperref setup
+% =========================================================
+\hypersetup{
+    colorlinks=true,
+    linkcolor=primaryblue,
+    citecolor=primaryblue,
+    urlcolor=codeblue,
+    pdftitle={CityPersons SD3.5 Pedestrian Augmentation: Technical Report},
+    pdfauthor={Bui Duc Thang}
+}
+
+% =========================================================
+% Code listing style
+% =========================================================
+\lstset{
+    backgroundcolor=\color{codegray},
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    commentstyle=\color{commentgreen},
+    keywordstyle=\color{codeblue}\bfseries,
+    stringstyle=\color{stringred},
+    numberstyle=\tiny\color{gray},
+    frame=single,
+    framesep=4pt,
+    rulecolor=\color{gray!40},
+    showstringspaces=false,
+    tabsize=4,
+    captionpos=b,
+    language=Python
+}
+
+% =========================================================
+% Header / Footer
+% =========================================================
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textcolor{gray}{CityPersons SD3.5 Augmentation}}
+\fancyhead[R]{\small\textcolor{gray}{Technical Report}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% =========================================================
+% Section formatting
+% =========================================================
+\titleformat{\section}
+{\large\bfseries\color{primaryblue}}
+{\thesection}{1em}{}
+[\vspace{-4pt}\rule{\linewidth}{0.6pt}]
+
+\titleformat{\subsection}
+{\normalsize\bfseries\color{primaryblue!80!black}}
+{\thesubsection}{1em}{}
+
+\titleformat{\subsubsection}
+{\normalsize\itshape\color{primaryblue!60!black}}
+{\thesubsubsection}{1em}{}
+
+% =========================================================
+% Document
+% =========================================================
+\begin{document}
+
+% =========================================================
+% Title Page
+% =========================================================
+\begin{titlepage}
+    \centering
+    \vspace*{2cm}
+
+    {\color{primaryblue}\rule{\linewidth}{2pt}}
+    \vspace{0.5cm}
+
+    {\Huge\bfseries\color{primaryblue}
+        CityPersons Pedestrian Augmentation\\[6pt]
+        using Stable Diffusion 3.5 Medium
+    }
+
+    \vspace{0.5cm}
+    {\color{primaryblue}\rule{\linewidth}{2pt}}
+
+    \vspace{1.5cm}
+
+    {\Large\bfseries Technical Report}
+
+    \vspace{1cm}
+
+    \begin{tabular}{ll}
+        \textbf{Project}    & CityPersons SD3.5 Pedestrian Augmentation \\[4pt]
+        \textbf{Task}       & Synthetic pedestrian insertion for urban Camera AI \\[4pt]
+        \textbf{Notebook}   & \texttt{v25 i think.ipynb} \\[4pt]
+        \textbf{Main Model} & Stable Diffusion 3.5 Medium \\[4pt]
+        \textbf{Segmentation Model} & YOLOv8m-seg \\[4pt]
+        \textbf{Dataset}    & CityPersons \\[4pt]
+        \textbf{Mode}       & Context person composite \\[4pt]
+        \textbf{Hardware}   & Kaggle GPU environment \\[4pt]
+        \textbf{Author}     & Bui Duc Thang \\
+    \end{tabular}
+
+    \vfill
+
+    {\small\color{gray}
+    VinSmart Future -- Camera AI / Computer Vision R\&D \quad|\quad June 2026
+    }
+
+\end{titlepage}
+
+% =========================================================
+% Table of Contents
+% =========================================================
+\tableofcontents
+\clearpage
+
+% =========================================================
+% Abstract
+% =========================================================
+\begin{abstract}
+\noindent
+This report documents the current implementation of a synthetic pedestrian
+augmentation pipeline for the CityPersons dataset using Stable Diffusion 3.5
+Medium. The goal of the project is to insert realistic pedestrians into existing
+urban street images while preserving the original background geometry, including
+road layout, vehicles, buildings, camera viewpoint, and perspective structure.
+
+The current notebook no longer follows a LoRA-training-first workflow. Instead,
+it implements a practical generation pipeline based on Smart Placement,
+context-aware SD3.5 image-to-image generation, YOLOv8m-seg person segmentation,
+person-only compositing, color matching, retry logic, debug export, and manifest
+logging. The active background preservation mode is
+\texttt{context\_person\_composite}. In this mode, Stable Diffusion generates a
+candidate pedestrian inside a local context crop, YOLOv8m-seg extracts the
+generated person mask, and only the pedestrian pixels are pasted back onto the
+original image.
+
+The main technical insight is that background preservation should not be solved
+only through prompt engineering. Full-image diffusion generation gives the model
+too much freedom and can rewrite the scene. Therefore, the notebook separates
+object generation from scene preservation: Stable Diffusion is used as a
+candidate pedestrian generator, while the original image remains the source of
+truth for the background.
+
+
+
+\end{abstract}
+
+\clearpage
+
+% =========================================================
+% 1. Introduction
+% =========================================================
+\section{Introduction}
+
+Pedestrian perception is a core component of Camera AI systems. In urban
+driving environments, systems for traffic monitoring, autonomous perception,
+smart surveillance, and pedestrian safety rely on robust detection and tracking
+of people at different distances, scales, occlusion levels, and lighting
+conditions. Although modern object detectors have improved significantly, their
+performance still depends heavily on the diversity and quality of annotated
+training data.
+
+CityPersons provides realistic urban pedestrian scenes, but the distribution of
+pedestrian appearances and placements is still limited by the original collected
+data. Synthetic augmentation can increase the diversity of the dataset by adding
+new pedestrians into existing scenes. However, this task is difficult because
+the inserted pedestrian must be realistic and must not corrupt the original
+scene.
+
+This project studies how Stable Diffusion 3.5 Medium can be used to generate
+synthetic pedestrians for CityPersons. The main challenge is not simply to
+generate a person. The generated person must be placed at a plausible position,
+match perspective, have a realistic scale, touch the ground, and integrate with
+the scene. At the same time, the background must remain stable so that road
+geometry, vehicles, buildings, and camera viewpoint are preserved.
+
+\subsection{Project Objective}
+
+The objective of the notebook is:
+
+\begin{quote}
+To generate realistic synthetic pedestrians inside CityPersons urban street
+images using Stable Diffusion 3.5 Medium, while preserving original background
+geometry through YOLOv8m-seg based person-only compositing.
+\end{quote}
+
+The output images are intended to support downstream pedestrian detection and
+tracking experiments. Therefore, visual realism alone is not enough. The
+generated pedestrian should also be detectable by a person detector and suitable
+for use as training data.
+
+\subsection{Current Notebook Direction}
+
+The current notebook is not mainly a LoRA training notebook. Earlier project
+iterations considered LoRA fine-tuning, but the current implementation focuses
+on a no-LoRA baseline using:
+
+\begin{itemize}
+    \item Smart Placement for insertion-region selection;
+    \item Stable Diffusion 3.5 Medium for context-aware image-to-image generation;
+    \item YOLOv8m-seg for generated-person segmentation;
+    \item person-only compositing for background preservation;
+    \item color matching for scene consistency;
+    \item retry logic for failed generations;
+    \item debug image export and manifest logging.
+\end{itemize}
+
+LoRA remains a possible future direction, but only if the current baseline fails
+systematically after parameter tuning, prompt engineering, placement adjustment,
+and compositing refinement.
+
+% =========================================================
+% 2. Problem Definition
+% =========================================================
+\section{Problem Definition}
+
+The task is synthetic pedestrian insertion. Given an original CityPersons image
+$I$, the notebook generates an augmented image $I'$ such that:
+
+\begin{enumerate}
+    \item $I'$ contains at least one additional pedestrian.
+    \item The new pedestrian is realistic and visible.
+    \item The new pedestrian is placed at a plausible ground location.
+    \item The pedestrian scale follows scene perspective.
+    \item The original background is preserved outside the inserted person.
+    \item The output image remains useful for detector or tracker training.
+\end{enumerate}
+
+This can be written as:
+
+\begin{equation}
+I' = C(I, G(I_{crop}, M, p), S)
+\end{equation}
+
+where:
+
+\begin{itemize}
+    \item $I$ is the original image;
+    \item $I_{crop}$ is a local context crop around the insertion region;
+    \item $M$ is the inpainting or generation mask;
+    \item $p$ is the text prompt;
+    \item $G$ is Stable Diffusion 3.5 generation;
+    \item $S$ is the YOLOv8m-seg person mask;
+    \item $C$ is the compositing function.
+\end{itemize}
+
+The key point is that the final background is primarily taken from $I$, not from
+the generated crop. The generated crop is used to obtain the new pedestrian.
+
+% =========================================================
+% 3. Dataset
+% =========================================================
+\section{Dataset}
+
+\subsection{CityPersons}
+
+The primary dataset is CityPersons, an urban pedestrian detection dataset
+derived from Cityscapes. It provides street-scene images with pedestrian
+annotations. The dataset is suitable for this project because it contains urban
+roads, sidewalks, vehicles, buildings, and pedestrians with realistic
+perspective.
+
+\begin{table}[H]
+\centering
+\caption{CityPersons dataset summary.}
+\label{tab:citypersons_summary}
+\begin{tabular}{lll}
+\toprule
+\textbf{Property} & \textbf{Value} & \textbf{Relevance} \\
+\midrule
+Training images & 2975 & Main source images for augmentation \\
+Validation images & 500 & Validation / review split \\
+Test images & 1575 & Reserved evaluation split \\
+Average pedestrians per image & Around 7 & Useful pedestrian context \\
+Annotations & Visible and full-body boxes & Support placement and scale reasoning \\
+Scene type & Urban street scenes & Relevant to Camera AI \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Why CityPersons Fits the Task}
+
+CityPersons is suitable because the images contain stable urban structure and
+realistic pedestrian scale. This is important for synthetic insertion because
+the model needs contextual cues such as road surface, sidewalk, vehicles, and
+camera perspective.
+
+Compared with highly crowded datasets, CityPersons is easier to control for
+insertion. Compared with tracking datasets such as MOT17, CityPersons provides
+more static urban-scene diversity for augmentation. MOT17 can still be used
+later for downstream tracking evaluation, but CityPersons is the main generation
+dataset in the current notebook.
+
+% =========================================================
+% 4. Model Choice
+% =========================================================
+\section{Model Choice}
+
+\subsection{Stable Diffusion 3.5 Medium}
+
+The notebook uses Stable Diffusion 3.5 Medium as the main generative backbone.
+The model is selected because it provides a practical balance between generation
+quality and feasibility on Kaggle GPU environments.
+
+The notebook uses:
+
+\begin{lstlisting}[language=Python,caption={Current SD3.5 configuration}]
+SD35_MODEL_ID = "stabilityai/stable-diffusion-3.5-medium"
+RESOLUTION = 448
+USE_T5 = False
+\end{lstlisting}
+
+The choice \texttt{USE\_T5=False} is important for Kaggle T4 safety. It reduces
+memory requirements and makes the pipeline more practical in limited-VRAM
+notebook environments.
+
+\subsection{YOLOv8m-seg}
+
+The current notebook uses YOLOv8m-seg for person segmentation:
+
+\begin{lstlisting}[language=Python,caption={Current person segmentation model}]
+CONTEXT_PERSON_SEGMENTATION_MODEL = "yolov8m-seg.pt"
+\end{lstlisting}
+
+This is an important detail. The notebook is not using \texttt{yolov8n-seg.pt}
+in the current version. YOLOv8m-seg is heavier than YOLOv8n-seg but provides
+stronger segmentation quality, which is useful because the final compositing
+quality depends heavily on the person mask.
+
+\subsection{Why Segmentation Is Needed}
+
+Stable Diffusion generates a full crop, not only the person. If the generated
+crop is directly pasted back into the original image, background pixels from the
+generated crop may replace original pixels. This can create road changes,
+sidewalk artifacts, building distortions, or inconsistent lighting.
+
+YOLO segmentation solves this by extracting only the generated pedestrian. The
+original image remains the background source.
+
+% =========================================================
+% 5. Current Notebook Configuration
+% =========================================================
+\section{Current Notebook Configuration}
+
+The active configuration in \texttt{v25 i think.ipynb} is summarized below.
+
+\begin{lstlisting}[language=Python,caption={Current global generation configuration}]
+BACKGROUND_PRESERVATION_MODE = "context_person_composite"
+
+RESOLUTION = 448
+USE_T5 = False
+
+AUGMENTATION_STRENGTH = 0.72
+GUIDANCE_SCALE = 7.2
+NUM_INFERENCE_STEPS = 42
+
+CONTEXT_CROP_EXPAND = 3.4
+CONTEXT_INPAINT_MASK_PADDING = 46
+CONTEXT_GENERATION_RETRIES = 4
+
+CONTEXT_PERSON_SEGMENTATION_MODEL = "yolov8m-seg.pt"
+CONTEXT_PERSON_MIN_CONFIDENCE = 0.12
+CONTEXT_PERSON_MASK_THRESHOLD = 0.32
+
+COLOR_MATCH_PERSON_TO_SCENE = True
+
+SAVE_PATCH_DEBUG = True
+PATCH_DEBUG_MAX_ITEMS = 24
+
+SCALE_ENVELOPE_HEIGHT_MULT = 1.16
+SCALE_ENVELOPE_WIDTH_MULT = 1.30
+
+PERSPECTIVE_SCALE_NEAR = 1.08
+PERSPECTIVE_SCALE_FAR = 0.46
+\end{lstlisting}
+
+\subsection{Variant-Specific Parameters}
+
+The notebook also defines variant-specific strength, guidance, and step values.
+
+\begin{lstlisting}[language=Python,caption={Variant-specific strength values}]
+VARIANT_STRENGTHS = {
+    "add_single_pedestrian": 0.72,
+    "add_two_pedestrians": 0.74,
+    "add_small_group": 0.76,
+    "add_occluded_pedestrian": 0.74,
+    "add_distant_pedestrian": 0.68,
+    "add_near_pedestrian": 0.76,
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=Python,caption={Variant-specific guidance values}]
+VARIANT_GUIDANCE_SCALES = {
+    "add_single_pedestrian": 6.8,
+    "add_two_pedestrians": 6.9,
+    "add_small_group": 7.0,
+    "add_occluded_pedestrian": 6.8,
+    "add_distant_pedestrian": 6.6,
+    "add_near_pedestrian": 7.3,
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=Python,caption={Variant-specific inference steps}]
+VARIANT_NUM_INFERENCE_STEPS = {
+    "add_single_pedestrian": 38,
+    "add_two_pedestrians": 38,
+    "add_small_group": 40,
+    "add_occluded_pedestrian": 38,
+    "add_distant_pedestrian": 34,
+    "add_near_pedestrian": 40,
+}
+\end{lstlisting}
+
+\subsection{Current Smoke-Test Cell}
+
+The current run cell generates 10 images using two variants:
+
+\begin{lstlisting}[language=Python,caption={Current smoke-test cell}]
+generated_paths = augment_dataset_limited_total(
+    records,
+    total_images=10,
+    variants=["add_single_pedestrian", "add_near_pedestrian"],
+    target_splits=["train"]
+)
+
+generated_paths[:5]
+\end{lstlisting}
+
+This means the current notebook is still in controlled smoke-test mode, not full
+dataset generation mode.
+
+% =========================================================
+% 6. Notebook Pipeline
+% =========================================================
+\section{Notebook Pipeline}
+
+The current notebook flow is:
+
+\begin{enumerate}
+    \item Install dependencies.
+    \item Check CUDA runtime.
+    \item Login to Hugging Face if needed.
+    \item Resolve CityPersons dataset root.
+    \item Define configuration and prompt templates.
+    \item Scan CityPersons image files and labels.
+    \item Build image records.
+    \item Build augmentation jobs.
+    \item Split jobs across available GPUs.
+    \item Load Stable Diffusion 3.5 pipeline.
+    \item Load YOLOv8m-seg model.
+    \item For each image and variant, select a smart insertion region.
+    \item Create a context crop around the target region.
+    \item Generate a pedestrian using SD3.5.
+    \item Run YOLOv8m-seg on the generated crop.
+    \item Select the person mask closest to the target insertion box.
+    \item If the person mask is invalid, retry generation.
+    \item Color-match the generated person to the local scene.
+    \item Paste only the person pixels onto the original image.
+    \item Add contact shadow if enabled.
+    \item Save augmented image, comparison pair, debug strip, and manifest entry.
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\begin{tabular}{|p{0.9\linewidth}|}
+\hline
+\textbf{Current Notebook Pipeline} \\[4pt]
+CityPersons Image \\
+$\downarrow$ \\
+Smart Placement \\
+$\downarrow$ \\
+Context Crop Construction \\
+$\downarrow$ \\
+SD3.5 Img2Img / Inpainting Generation \\
+$\downarrow$ \\
+YOLOv8m-seg Person Segmentation \\
+$\downarrow$ \\
+Person Mask Validation and Retry \\
+$\downarrow$ \\
+Color Matching \\
+$\downarrow$ \\
+Person-only Composite onto Original Image \\
+$\downarrow$ \\
+Save Image, Comparison Pair, Patch Debug, and Manifest \\
+\hline
+\end{tabular}
+\caption{Current pipeline implemented in the notebook.}
+\label{fig:current_pipeline}
+\end{figure}
+
+% =========================================================
+% 7. Pipeline Evolution
+% =========================================================
+\section{Pipeline Evolution}
+
+The current notebook is the result of multiple design iterations. Each version
+was created to solve a specific failure mode.
+
+\subsection{Full-Image Img2Img}
+
+The earliest approach used full-image image-to-image generation. The model saw
+the entire scene and was prompted to add a pedestrian.
+
+\subsubsection{Problem}
+
+At low strength, the model often did not add a visible person. At high strength,
+the model added stronger pedestrian content but modified background regions.
+Road texture, buildings, vehicles, and scene layout could change.
+
+\subsubsection{Lesson}
+
+Full-image diffusion is too unconstrained for background-preserving pedestrian
+insertion. Prompting ``preserve background'' is not enough if the model is
+allowed to denoise the entire image.
+
+\subsection{Patch-Based Generation}
+
+The next approach generated only a local patch. This preserved the background
+outside the patch.
+
+\subsubsection{Problem}
+
+The background inside the patch could still be changed. If the patch was too
+small, the generated person became weak or incomplete. If the patch was too
+large, background corruption increased.
+
+\subsubsection{Lesson}
+
+Patch-based generation reduces the affected area but does not solve the
+fundamental problem of generated background replacing original background.
+
+\subsection{Human-Mask Inpainting}
+
+A tighter human-shaped mask was tested to protect the background.
+
+\subsubsection{Problem}
+
+The mask was too restrictive. The model often generated ghost-like or
+skeleton-like pedestrians. Some outputs showed only partial limbs or faint
+silhouettes.
+
+\subsubsection{Lesson}
+
+Stable Diffusion needs spatial freedom to generate a complete body. A very tight
+mask protects the background but harms person generation.
+
+\subsection{Bounding-Box Inpainting}
+
+The human-shaped mask was replaced by a rounded bounding-box mask.
+
+\subsubsection{Improvement}
+
+The pedestrian became clearer because the model had more room to generate a
+complete person.
+
+\subsubsection{Remaining Problem}
+
+Background pixels inside the box could still be rewritten. Directly pasting the
+generated box into the original image could create local artifacts.
+
+\subsection{Flexible Scale Envelope}
+
+The bounding box was then relaxed into a flexible scale envelope. Instead of
+forcing the model to fill an exact person box, the notebook gives the model a
+larger approximate region.
+
+The current notebook uses:
+
+\begin{lstlisting}[language=Python,caption={Current scale envelope values}]
+SCALE_ENVELOPE_HEIGHT_MULT = 1.16
+SCALE_ENVELOPE_WIDTH_MULT = 1.30
+\end{lstlisting}
+
+\subsubsection{Lesson}
+
+The bbox should guide the model, not over-constrain it. Flexible envelopes allow
+the model to generate more natural pose and body shape.
+
+\subsection{Context Person Composite}
+
+The final design is context person composite. In this design, SD3.5 is allowed
+to generate inside a context crop, but the final image only uses the segmented
+person pixels from the generated crop.
+
+This separates:
+
+\begin{itemize}
+    \item person generation, handled by SD3.5;
+    \item person extraction, handled by YOLOv8m-seg;
+    \item background preservation, handled by original-image compositing.
+\end{itemize}
+
+% =========================================================
+% 8. Smart Placement
+% =========================================================
+\section{Smart Placement}
+
+Smart Placement selects a plausible insertion position before generation. This
+is necessary because random insertion may place a pedestrian on a car, in the
+sky, inside a building, or at an impossible scale.
+
+\subsection{Perspective-Aware Scale}
+
+The current notebook uses perspective priors:
+
+\begin{lstlisting}[language=Python,caption={Current perspective scale values}]
+PERSPECTIVE_SCALE_FAR = 0.46
+PERSPECTIVE_SCALE_NEAR = 1.08
+\end{lstlisting}
+
+The scale is computed from the pedestrian ground point:
+
+\begin{equation}
+t =
+\frac{y - y_{\text{far}}}
+{y_{\text{near}} - y_{\text{far}}}
+\end{equation}
+
+\begin{equation}
+s(y) =
+s_{\text{far}} + t(s_{\text{near}} - s_{\text{far}})
+\end{equation}
+
+where $y$ is the vertical ground position of the inserted pedestrian.
+
+\subsection{Variant-Specific Placement}
+
+The notebook supports multiple variants:
+
+\begin{itemize}
+    \item \texttt{add\_single\_pedestrian};
+    \item \texttt{add\_two\_pedestrians};
+    \item \texttt{add\_small\_group};
+    \item \texttt{add\_occluded\_pedestrian};
+    \item \texttt{add\_distant\_pedestrian};
+    \item \texttt{add\_near\_pedestrian}.
+\end{itemize}
+
+However, the current smoke test only uses:
+
+\begin{itemize}
+    \item \texttt{add\_single\_pedestrian};
+    \item \texttt{add\_near\_pedestrian}.
+\end{itemize}
+
+This makes sense because near-person and single-person outputs are easier to
+inspect during debugging.
+
+% =========================================================
+% 9. Prompt Engineering
+% =========================================================
+\section{Prompt Engineering}
+
+Prompt design is important because SD3.5 has a token limit and can ignore weak
+instructions. Earlier prompts were too long and repeated background preservation
+phrases. The current pipeline reduces the need for long preservation prompts
+because the final background is taken from the original image.
+
+\subsection{Prompt Design Principle}
+
+The prompt should focus on generating the new pedestrian:
+
+\begin{itemize}
+    \item realistic person;
+    \item full body;
+    \item grounded feet;
+    \item correct scale;
+    \item visible body parts;
+    \item compatible with road or sidewalk context.
+\end{itemize}
+
+The pipeline, not the prompt alone, handles background preservation.
+
+\subsection{Negative Prompt}
+
+The negative prompt targets observed failure modes:
+
+\begin{itemize}
+    \item empty mask;
+    \item unchanged image;
+    \item invisible person;
+    \item ghost person;
+    \item cropped body;
+    \item missing head;
+    \item missing arms;
+    \item missing legs;
+    \item missing feet;
+    \item floating person;
+    \item wrong scale;
+    \item bad anatomy;
+    \item background change.
+\end{itemize}
+
+% =========================================================
+% 10. YOLOv8m-seg Person Extraction
+% =========================================================
+\section{YOLOv8m-seg Person Extraction}
+
+\subsection{Why YOLOv8m-seg Is Used}
+
+The current notebook uses YOLOv8m-seg, not YOLOv8n-seg. The reason is that mask
+quality is important in this pipeline. If the mask is poor, the pasted person
+may have halos, missing parts, or background leakage.
+
+YOLOv8m-seg provides stronger segmentation than the nano variant, while still
+being practical in the notebook environment.
+
+\subsection{Confidence and Mask Threshold}
+
+The current thresholds are:
+
+\begin{lstlisting}[language=Python,caption={Current YOLO segmentation thresholds}]
+CONTEXT_PERSON_MIN_CONFIDENCE = 0.12
+CONTEXT_PERSON_MASK_THRESHOLD = 0.32
+\end{lstlisting}
+
+The confidence threshold is relatively low because generated pedestrians may be
+imperfect, especially during early attempts. A low threshold helps recover
+usable person masks, while the retry and validation logic prevents weak masks
+from being accepted silently.
+
+\subsection{Person Selection}
+
+YOLO may detect multiple people in the generated crop. The notebook selects the
+person closest to the intended insertion region. This prevents existing people
+or unrelated detections from being selected.
+
+Conceptually:
+
+\begin{lstlisting}[language=Python,caption={Person selection concept}]
+def select_generated_person_mask(generated_crop, target_bbox):
+    detections = yolo_segment(generated_crop)
+
+    best_mask = None
+    best_score = -1
+
+    for detection in detections:
+        if detection.class_name != "person":
+            continue
+
+        overlap_score = iou(detection.bbox, target_bbox)
+        distance_score = center_similarity(detection.bbox, target_bbox)
+        score = overlap_score + distance_score + detection.confidence
+
+        if score > best_score:
+            best_score = score
+            best_mask = detection.mask
+
+    return best_mask
+\end{lstlisting}
+
+% =========================================================
+% 11. Person-Only Compositing
+% =========================================================
+\section{Person-Only Compositing}
+
+\subsection{Core Idea}
+
+The generated crop is not directly pasted into the original image. Instead, the
+pipeline uses the YOLOv8m-seg mask to paste only the generated pedestrian pixels.
+
+This design is the main reason the background can be preserved.
+
+\begin{figure}[H]
+\centering
+\begin{tabular}{|p{0.9\linewidth}|}
+\hline
+\textbf{Person-only Composite Logic} \\[4pt]
+Original image provides the final background. \\
+Generated crop provides the candidate pedestrian. \\
+YOLOv8m-seg extracts the person mask. \\
+Only person pixels are pasted onto the original image. \\
+Everything outside the person mask remains from the original image. \\
+\hline
+\end{tabular}
+\caption{Person-only compositing strategy.}
+\end{figure}
+
+\subsection{Color Matching}
+
+The notebook enables color matching:
+
+\begin{lstlisting}[language=Python,caption={Current color matching flag}]
+COLOR_MATCH_PERSON_TO_SCENE = True
+\end{lstlisting}
+
+This step adjusts the generated person's color statistics toward the local
+source scene. It helps reduce the mismatch between generated clothing/person
+pixels and the surrounding lighting.
+
+\subsection{Contact and Grounding}
+
+The prompt and placement logic encourage the pedestrian's feet to touch the
+ground. If the generated person looks like a sticker, contact shadow can improve
+integration. However, shadow should be light and local. Strong blending can
+damage detector usefulness.
+
+% =========================================================
+% 12. Context Crop Design
+% =========================================================
+\section{Context Crop Design}
+
+The current notebook uses a relatively large context crop:
+
+\begin{lstlisting}[language=Python,caption={Current context crop settings}]
+CONTEXT_CROP_EXPAND = 3.4
+CONTEXT_INPAINT_MASK_PADDING = 46
+\end{lstlisting}
+
+\subsection{Why Context Crop Is Large}
+
+A larger crop allows SD3.5 to see the surrounding road, sidewalk, vehicle scale,
+and scene perspective. This is important because the model needs context to
+generate a pedestrian that fits the scene.
+
+\subsection{Trade-Off}
+
+A larger crop increases context understanding but also gives the model more
+background information to modify internally. However, because the final image
+uses person-only compositing, internal crop background changes are less harmful.
+The generated background is not directly trusted.
+
+\subsection{Current Design Rationale}
+
+The current configuration uses large context but controlled compositing:
+
+\begin{itemize}
+    \item large crop for better generation;
+    \item YOLOv8m-seg for person extraction;
+    \item original image for final background;
+    \item retry if no valid person is detected.
+\end{itemize}
+
+% =========================================================
+% 13. Retry Logic
+% =========================================================
+\section{Retry Logic}
+
+The current notebook uses:
+
+\begin{lstlisting}[language=Python,caption={Current retry configuration}]
+CONTEXT_GENERATION_RETRIES = 4
+\end{lstlisting}
+
+This means the notebook can retry generation when no valid person mask is found.
+Retry is necessary because diffusion generation is stochastic. Some attempts may
+produce no person, a weak person, or a person that YOLO cannot segment.
+
+\subsection{Retry Purpose}
+
+Retry logic prevents the notebook from accepting bad samples too easily.
+Instead of saving an unchanged or invalid output, the notebook attempts another
+generation.
+
+\subsection{Failure Cases That Trigger Retry}
+
+Retry can be triggered by:
+
+\begin{itemize}
+    \item no YOLO person mask;
+    \item person mask too small;
+    \item person too faint;
+    \item generated person far from target bbox;
+    \item segmentation failure.
+\end{itemize}
+
+% =========================================================
+% 14. Debug and Output
+% =========================================================
+\section{Debug and Output}
+
+The current notebook enables patch debug:
+
+\begin{lstlisting}[language=Python,caption={Current debug settings}]
+SAVE_PATCH_DEBUG = True
+PATCH_DEBUG_MAX_ITEMS = 24
+\end{lstlisting}
+
+\subsection{Why Debug Output Is Important}
+
+Debug output is essential because the final augmented image alone does not show
+where the failure occurred. A failure may come from:
+
+\begin{itemize}
+    \item Smart Placement;
+    \item SD3.5 generation;
+    \item YOLO segmentation;
+    \item mask selection;
+    \item color matching;
+    \item compositing.
+\end{itemize}
+
+Patch debug strips make it possible to inspect intermediate steps such as source
+crop, generated crop, person mask, and final composite.
+
+\subsection{Manifest Logging}
+
+The notebook writes manifest information so that each generated sample can be
+traced back to its source image, variant, seed, generation parameters, and output
+path.
+
+Recommended manifest fields include:
+
+\begin{lstlisting}[language={},caption={Recommended manifest columns}]
+source_path
+output_path
+comparison_path
+variant
+strength
+guidance_scale
+num_inference_steps
+seed
+target_bbox
+selected_person_bbox
+detected_person_confidence
+person_mask_area_ratio
+context_retry_count
+segmentation_success
+fallback_used
+accepted
+reject_reason
+\end{lstlisting}
+
+% =========================================================
+% 15. Failure Analysis
+% =========================================================
+\section{Failure Analysis}
+
+\subsection{Background Corruption}
+
+\textbf{Symptom:} Road, buildings, vehicles, or sidewalk textures are modified.
+
+\textbf{Cause:} Full-image or patch-level generation allows diffusion to rewrite
+background pixels.
+
+\textbf{Current Fix:} Use \texttt{context\_person\_composite}. The generated
+crop is used only to extract the person; the original image remains the
+background.
+
+\subsection{Ghost Pedestrian}
+
+\textbf{Symptom:} The generated pedestrian appears as a faint silhouette.
+
+\textbf{Cause:} Generation signal is too weak, mask is too tight, or prompt is
+not directive enough.
+
+\textbf{Current Fix:} Use context crop, flexible scale envelope, stronger
+person-focused prompt, and retry logic.
+
+\subsection{Partial Body}
+
+\textbf{Symptom:} Missing head, missing legs, missing arms, or cropped body.
+
+\textbf{Cause:} Inpaint region too small, generation region too constrained, or
+segmentation mask removes body parts.
+
+\textbf{Current Fix:} Use context crop expansion, mask padding, and full-body
+prompt. The current mask padding is \texttt{46}, giving the model more space.
+
+\subsection{Wrong Scale}
+
+\textbf{Symptom:} Pedestrian is too small, too large, or inconsistent with
+perspective.
+
+\textbf{Cause:} Placement and scale estimation do not match scene geometry.
+
+\textbf{Current Fix:} Use perspective scale priors with
+\texttt{PERSPECTIVE\_SCALE\_FAR=0.46} and
+\texttt{PERSPECTIVE\_SCALE\_NEAR=1.08}, plus flexible scale envelope.
+
+\subsection{Segmentation Failure}
+
+\textbf{Symptom:} YOLO does not detect the generated pedestrian.
+
+\textbf{Cause:} The person is too faint, too small, incomplete, or confidence is
+below threshold.
+
+\textbf{Current Fix:} Use YOLOv8m-seg, lower confidence threshold
+\texttt{0.12}, mask threshold \texttt{0.32}, and retry up to four times.
+
+\subsection{Prompt Token Limit}
+
+\textbf{Symptom:} Token sequence length warning.
+
+\textbf{Cause:} Prompt too long.
+
+\textbf{Fix:} Keep prompts short and focus on the object. Let the pipeline
+handle background preservation.
+
+\subsection{Large Output Folder}
+
+\textbf{Symptom:} Output zip becomes too large.
+
+\textbf{Cause:} Zipping all of \texttt{/kaggle/working} instead of only the
+augmentation output directory.
+
+\textbf{Fix:} Zip only the configured \texttt{OUTPUT\_DIR}.
+
+% =========================================================
+% 16. Evaluation Strategy
+% =========================================================
+\section{Evaluation Strategy}
+
+\subsection{Why Evaluation Is Needed}
+
+Generated images should not be accepted only by visual inspection. For Camera AI
+augmentation, the output must be useful for detection and tracking. A visually
+interesting image may still be useless if the detector cannot detect the
+inserted person or if the background changes too much.
+
+\subsection{Proposed Metrics}
+
+\begin{table}[H]
+\centering
+\caption{Evaluation metrics for the current pipeline.}
+\label{tab:evaluation_metrics}
+\begin{tabular}{lll}
+\toprule
+\textbf{Metric} & \textbf{Tool} & \textbf{Purpose} \\
+\midrule
+Person detection rate & YOLO detector & Check if person is visible \\
+Person segmentation confidence & YOLOv8m-seg & Check mask reliability \\
+Person mask area ratio & YOLOv8m-seg & Reject ghost/tiny persons \\
+Background SSIM & Image similarity & Check background preservation \\
+Background LPIPS & Perceptual metric & Check perceptual drift \\
+Retry count & Notebook log & Check generation stability \\
+Fallback rate & Manifest & Check failure frequency \\
+Variant correctness & YOLO + manual review & Check if variant matches prompt \\
+Downstream mAP & Detector retraining & Final usefulness \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Smoke-Test Evaluation}
+
+The current notebook is configured for a small smoke test:
+
+\begin{itemize}
+    \item \texttt{total\_images=10};
+    \item variants: \texttt{add\_single\_pedestrian},
+          \texttt{add\_near\_pedestrian};
+    \item split: \texttt{train}.
+\end{itemize}
+
+The purpose of this test is not to produce the final dataset. It is to verify:
+
+\begin{itemize}
+    \item whether SD3.5 generates a visible person;
+    \item whether YOLOv8m-seg can extract the person;
+    \item whether person-only composite preserves background;
+    \item whether scale and ground contact look reasonable;
+    \item whether retry rate is acceptable.
+\end{itemize}
+
+% =========================================================
+% 17. Discussion
+% =========================================================
+\section{Discussion}
+
+\subsection{Why the Current Pipeline Is More Correct Than Full Img2Img}
+
+Full-image img2img gives Stable Diffusion control over the entire image. This
+makes it hard to preserve scene geometry. The current pipeline gives SD3.5
+control only inside a context crop, then extracts the person and restores the
+background from the original image.
+
+This is more appropriate for dataset augmentation because the original scene
+geometry is still reliable.
+
+\subsection{Why YOLOv8m-seg Matters}
+
+The current notebook depends on segmentation quality. If the segmentation mask
+is poor, the final composite will be poor. This explains why the notebook uses
+\texttt{yolov8m-seg.pt}. The medium segmentation model is a better choice than
+the nano model when mask quality is important.
+
+\subsection{Why Strength Is Lower in the Current Notebook}
+
+Earlier versions used very high strength to force the model to generate a
+person. The current notebook uses lower global strength:
+
+\begin{lstlisting}[language=Python]
+AUGMENTATION_STRENGTH = 0.72
+GUIDANCE_SCALE = 7.2
+\end{lstlisting}
+
+The reason is that the current pipeline uses larger context, better segmentation,
+and retry logic. It does not need to over-force generation as aggressively. The
+variant-specific strengths still increase for harder cases such as near
+pedestrians or groups.
+
+\subsection{Why LoRA Is Still Optional}
+
+LoRA may become useful if the current pipeline fails repeatedly. However, many
+previous problems were not caused by lack of model knowledge. They were caused
+by editing-control issues:
+
+\begin{itemize}
+    \item background rewrite;
+    \item bad placement;
+    \item wrong scale;
+    \item weak segmentation;
+    \item poor compositing;
+    \item prompt length.
+\end{itemize}
+
+These problems are better solved by pipeline design than by immediate
+fine-tuning.
+
+% =========================================================
+% 18. Current State
+% =========================================================
+\section{Current State}
+
+The current notebook state is:
+
+\begin{itemize}
+    \item Main mode: \texttt{context\_person\_composite}.
+    \item Main generation model: Stable Diffusion 3.5 Medium.
+    \item Text encoder setting: \texttt{USE\_T5=False}.
+    \item Resolution: \texttt{448}.
+    \item Segmentation model: \texttt{yolov8m-seg.pt}.
+    \item Context crop expansion: \texttt{3.4}.
+    \item Mask padding: \texttt{46}.
+    \item Retry count: \texttt{4}.
+    \item Color matching: enabled.
+    \item Patch debug: enabled.
+    \item Smoke test: 10 images.
+    \item Current variants: \texttt{add\_single\_pedestrian} and
+          \texttt{add\_near\_pedestrian}.
+\end{itemize}
+
+This means the notebook is currently in a controlled evaluation stage. It is not
+yet running full-scale augmentation.
+
+% =========================================================
+% 19. Future Work
+% =========================================================
+\section{Future Work}
+
+\subsection{Run Larger Evaluation}
+
+The next step should be progressive scaling:
+
+\begin{enumerate}
+    \item Run 10 images for smoke test.
+    \item Review patch debug and comparison pairs.
+    \item Run 24 or 40 images with more variants.
+    \item Compute retry rate and segmentation success rate.
+    \item Run 200--500 images only after quality is stable.
+\end{enumerate}
+
+\subsection{Improve Manifest Metrics}
+
+The manifest should include more diagnostic fields:
+
+\begin{itemize}
+    \item retry count;
+    \item segmentation success;
+    \item selected person confidence;
+    \item person mask area ratio;
+    \item target bbox;
+    \item selected person bbox;
+    \item reject reason;
+    \item fallback flag;
+    \item background similarity metrics.
+\end{itemize}
+
+\subsection{Downstream Detector Training}
+
+After enough accepted samples are generated, the next experiment should compare:
+
+\begin{itemize}
+    \item detector trained without synthetic augmentation;
+    \item detector trained with accepted synthetic images;
+    \item validation performance on CityPersons;
+    \item possible tracking evaluation on MOT17.
+\end{itemize}
+
+\subsection{LoRA Decision}
+
+LoRA should only be considered if the current no-LoRA baseline fails
+systematically. Possible triggers include:
+
+\begin{itemize}
+    \item low person generation success rate;
+    \item high retry rate;
+    \item repeated ghost pedestrians;
+    \item repeated missing body parts;
+    \item poor realism even when placement and compositing are correct.
+\end{itemize}
+
+% =========================================================
+% 20. Conclusion
+% =========================================================
+\section{Conclusion}
+
+This project develops a synthetic pedestrian augmentation pipeline for
+CityPersons using Stable Diffusion 3.5 Medium. The current notebook implements a
+context-aware generation and YOLOv8m-seg based person-only compositing pipeline,
+rather than a LoRA-first training pipeline.
+
+The main design is to let Stable Diffusion generate a pedestrian inside a large
+context crop while using YOLOv8m-seg to extract the generated person. The final
+image preserves the original background by pasting only person pixels back onto
+the source frame. This addresses the main weakness of full-image img2img:
+background corruption.
+
+The current configuration uses \texttt{yolov8m-seg.pt}, \texttt{RESOLUTION=448},
+\texttt{AUGMENTATION\_STRENGTH=0.72}, \texttt{GUIDANCE\_SCALE=7.2},
+\texttt{CONTEXT\_CROP\_EXPAND=3.4}, \texttt{CONTEXT\_INPAINT\_MASK\_PADDING=46},
+and \texttt{CONTEXT\_GENERATION\_RETRIES=4}. The notebook is currently configured
+to run a 10-image smoke test on the training split with
+\texttt{add\_single\_pedestrian} and \texttt{add\_near\_pedestrian} variants.
+
+The most important conclusion is that background preservation is an architectural
+problem, not only a prompt-engineering problem. The second conclusion is that
+LoRA fine-tuning is optional and should only be introduced after the current
+baseline is measured and shown to fail systematically.
+
+% =========================================================
+% References
+% =========================================================
+\begin{thebibliography}{9}
+
+\bibitem{citypersons}
+S. Zhang, R. Benenson, and B. Schiele,
+``CityPersons: A Diverse Dataset for Pedestrian Detection,''
+in \textit{Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition},
+2017.
+
+\bibitem{stablediffusion35}
+Stability AI,
+``Stable Diffusion 3.5 Medium,''
+2024.
+
+\bibitem{yolov8}
+G. Jocher et al.,
+``Ultralytics YOLOv8,''
+2023.
+
+\bibitem{lpips}
+R. Zhang, P. Isola, A. A. Efros, E. Shechtman, and O. Wang,
+``The Unreasonable Effectiveness of Deep Features as a Perceptual Metric,''
+in \textit{Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition},
+2018.
+
+\bibitem{mot17}
+A. Milan, L. Leal-Taixe, I. Reid, S. Roth, and K. Schindler,
+``MOT16: A Benchmark for Multi-Object Tracking,''
+arXiv preprint arXiv:1603.00831, 2016.
+
+\end{thebibliography}
+
+\end{document}
