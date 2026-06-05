@@ -224,7 +224,7 @@ Multi-person small-group had lower acceptance rate than two-pedestrian, consiste
 \subsection{Quality Gate}
 \begin{itemize}
     \item Target: acceptance $\geq 80\%$ and background SSIM $\geq 0.86$ across all variants.
-    \item If acceptance $< 60\%$ after parameter sweep: LoRA fine-tuning on CityPersons pedestrian crops.
+    \item If acceptance $< 60\%$ after parameter sweep: continue pipeline-level refinement, including confidence scheduling, retry-policy tuning, insertion-guide geometry, and stricter variant-wise quality analysis.
 \end{itemize}
 
 \section{Summary}
