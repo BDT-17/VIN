@@ -4,7 +4,7 @@
 
 **Stable Diffusion 3.5 Medium (BF16/FP16)** được chọn làm model chính cho pipeline **CityPersons Pedestrian Augmentation**.
 
-Lưu ý quan trọng: hướng triển khai hiện tại **không còn LoRA/fine-tuning**. Model được dùng cho **inference/img2img augmentation**, kết hợp với YOLOv8m-seg để segment người mới và composite lại vào ảnh gốc. Vì vậy tiêu chí lựa chọn model tập trung vào:
+Model được dùng cho **inference/img2img augmentation**, kết hợp với YOLOv8m-seg để segment người mới và composite lại vào ảnh gốc. Vì vậy tiêu chí lựa chọn model tập trung vào:
 
 - chất lượng generation;
 - khả năng bám prompt;
