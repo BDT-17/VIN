@@ -102,17 +102,6 @@ Snapshot autotune được lưu trong:
 autotune_snapshots/
 ```
 
-## Multi-GPU
-
-Khi `USE_ALL_GPUS_FOR_AUGMENTATION=True`, notebook tự detect các CUDA device có sẵn và chia augmentation jobs theo GPU.
-
-Ví dụ trên máy có 2 GPU:
-
-```python
-["cuda:0", "cuda:1"]
-```
-
-Nếu chỉ có 1 GPU thì chạy như single-GPU. Nếu không có CUDA thì fallback CPU.
 
 ## Outputs
 
