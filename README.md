@@ -72,7 +72,7 @@ Run the notebook cells in order:
 ```text
 1. Install Dependencies
 2. Clone Or Update Repo
-3. Autoreload And Imports
+3. Imports
 4. Runtime Check
 5. Hugging Face Login
 6. Dataset Scan
