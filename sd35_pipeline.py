@@ -28,6 +28,7 @@ except ImportError:
     cv2 = None
 
 from sd35_config import *
+from sd35_data import build_generation_prompt, build_variant_negative_prompt
 from sd35_utils import *
 from sd35_evaluation import *
 
