@@ -140,6 +140,14 @@ def union_bboxes(bboxes):
     )
 
 
+def mask_bbox_touches_border(mask_bbox, size, margin=PERSON_BORDER_REJECT_PIXELS):
+    if mask_bbox is None:
+        return True
+    width, height = size
+    x1, y1, x2, y2 = mask_bbox
+    return x1 <= margin or y1 <= margin or x2 >= width - margin or y2 >= height - margin
+
+
 def person_overlap_depth_ok(front_bbox, occluded_bbox):
     """Allow overlap only when the occluded person is plausibly behind the pasted one."""
     inter = bbox_intersection_area(front_bbox, occluded_bbox)
@@ -1452,4 +1460,3 @@ def validate_pasted_person_mask(pasted_mask, variant, insert_bbox, resolution=RE
         opaque_ratio = float(np.mean(mask_arr[active] > 0.72))
         if opaque_ratio < MIN_ACCEPTED_MASK_OPAQUE_RATIO:
             raise RuntimeError(f"Accepted person mask is too soft/transparent (opaque_ratio={opaque_ratio:.2f}).")
-
