@@ -1,11 +1,11 @@
 # BÁO CÁO SO SÁNH CÁC PHIÊN BẢN PIPELINE SD3.5 CITYPERSONS AUGMENTATION
-## Dựa trên lịch sử phát triển qua chat session
+
 
 ---
 
 ## TÓM TẮT EXECUTIVE
 
-Dự án "Evaluation-Guided SD3.5 CityPersons Augmentation" đã trải qua **5 phiên bản pipeline chính** (V1 → V5) trong quá trình phát triển. Mỗi phiên bản đại diện cho một bước tiến trong việc giải quyết bài toán cốt lõi: **thêm pedestrian vào ảnh đô thị mà giữ nguyên background gốc**. Báo cáo này phân tích chi tiết từng phiên bản, nguyên nhân chuyển đổi, lỗi gặp phải, và insight kỹ thuật rút ra.
+Dự án "Evaluation-Guided SD3.5 CityPersons Augmentation" đã trải qua **5 phiên bản pipeline chính** (V1 → V5) trong quá trình phát triển. Mỗi phiên bản đại diện cho một bước tiến trong việc giải quyết bài toán cốt lõi: **thêm object vào ảnh mà giữ nguyên background gốc**. Báo cáo này phân tích chi tiết từng phiên bản, nguyên nhân chuyển đổi, lỗi gặp phải, và insight kỹ thuật rút ra.
 
 **Kết luận tổng quan:**
 - V1 (Full Image Img2Img): Pipeline cơ bản, đơn giản nhưng phá background nặng
@@ -16,7 +16,7 @@ Dự án "Evaluation-Guided SD3.5 CityPersons Augmentation" đã trải qua **5 
 
 ---
 
-## TRANG 1: BỐI CẢNH DỰ ÁN VÀ MỤC TIÊU
+## 1 BỐI CẢNH DỰ ÁN VÀ MỤC TIÊU
 
 ### 1.1 Bài toán nghiên cứu
 
@@ -56,7 +56,7 @@ Evaluator (YOLO, SSIM, LPIPS) dùng để rank/filter ảnh, không đưa trực
 
 ---
 
-## TRANG 2: PHIÊN BẢN V1 - FULL IMAGE IMG2IMG
+## 2 PHIÊN BẢN V1 - FULL IMAGE IMG2IMG
 
 ### 2.1 Kiến trúc V1
 
@@ -163,7 +163,7 @@ Vì denoise toàn bộ latent, model có quyền thay đổi mọi pixel. Prompt
 
 ---
 
-## TRANG 3: PHIÊN BẢN V2 - PATCH BLEND
+## 3: PHIÊN BẢN V2 - PATCH BLEND
 
 ### 3.1 Động lực chuyển đổi
 
@@ -262,7 +262,7 @@ Vẽ silhouette người mờ trong vùng insert trước khi đưa patch vào S
 
 ---
 
-## TRANG 4: PHIÊN BẢN V3 - HUMAN MASK INPAINT
+##  4: PHIÊN BẢN V3 - HUMAN MASK INPAINT
 
 ### 4.1 Động lực chuyển đổi
 
@@ -362,7 +362,7 @@ Mask hình người quá chặt → model bị "bóp" → output yếu.
 
 ---
 
-## TRANG 5: PHIÊN BẢN V4 - BBOX INPAINT
+##  5: PHIÊN BẢN V4 - BBOX INPAINT
 
 ### 5.1 Động lực chuyển đổi
 
@@ -477,7 +477,7 @@ Original scene: màu lạnh, ánh sáng từ phải
 
 ---
 
-## TRANG 6: PHIÊN BẢN V5 - CONTEXT PERSON COMPOSITE (HIỆN TẠI)
+##  6: PHIÊN BẢN V5 - CONTEXT PERSON COMPOSITE (HIỆN TẠI)
 
 ### 6.1 Động lực chuyển đổi
 
@@ -495,11 +495,11 @@ Team quyết định **tách biệt hoàn toàn** "sinh người" và "giữ bac
 ### 6.2 Kiến trúc V5
 
 ```
-Original Image (448x448)
+Original Image (512x512)
 → Smart Placement V2 chọn insert_bbox
-→ Expand context crop 2.4x quanh bbox
-→ SD3.5 Inpaint trên crop (mask rộng)
-→ YOLOv8n-seg detect/segment person trong generated crop
+→ Expand context crop 3.4x quanh bbox
+→ SD3.5 img2img trên context crop (default clean notebook)
+→ YOLOv8m-seg detect/segment person trong generated crop
 → Chọn person mask gần insert_bbox nhất
 → Color-match person pixels theo scene
 → Paste chỉ person pixels vào ảnh gốc
@@ -510,17 +510,15 @@ Original Image (448x448)
 **Core pipeline:**
 ```python
 # 1. Context crop
-crop_bbox = expand_bbox_with_context(insert_bbox, source.size, ratio=2.4)
+crop_bbox = expand_bbox_with_context(insert_bbox, source.size, ratio=3.4)
 crop = source.crop(crop_bbox)
 
-# 2. Inpaint on crop
-mask_crop = bbox_mask_for_crop(crop.size, insert_bbox_relative)
+# 2. Context generation on crop
 generated_crop = pipe(
     image=crop,
     prompt=prompt,
-    mask_image=mask_crop,
-    strength=0.88,
-    guidance_scale=8.0,
+    strength=0.72,
+    guidance_scale=6.8,
 ).images[0]
 
 # 3. YOLO-seg detect person
@@ -540,12 +538,12 @@ result.paste(person_matched, (insert_x, insert_y), person_mask_crop)
 result = add_contact_shadow(result, insert_bbox, variant)
 ```
 
-### 6.3 YOLOv8n-seg Integration
+### 6.3 YOLOv8m-seg Integration
 
 ```python
 from ultralytics import YOLO
 
-yolo_seg_model = YOLO("yolov8n-seg.pt")
+yolo_seg_model = YOLO("yolov8m-seg.pt")
 
 # Detect + segment person in generated crop
 results = yolo_seg_model.predict(
@@ -612,35 +610,51 @@ SCALE_ENVELOPE_WIDTH_MULT = 1.34
 
 ```python
 BACKGROUND_PRESERVATION_MODE = "context_person_composite"
-CONTEXT_CROP_EXPAND = 2.4
-CONTEXT_INPAINT_MASK_PADDING = 40
-CONTEXT_GENERATION_RETRIES = 3
+CONTEXT_PERSON_GENERATION_PIPELINE = "img2img"
+CONTEXT_CROP_EXPAND = 3.4
+CONTEXT_CROP_MIN_SIZE = 192
+CONTEXT_INPAINT_MASK_PADDING = 46
+CONTEXT_GENERATION_RETRIES = 4
+RESOLUTION = 512
+
+# Current clean-notebook mask/compositing defaults
+CONTEXT_PERSON_MASK_THRESHOLD = 0.40
+PERSON_MASK_TRIM_FRINGE_PIXELS = 1
+PERSON_MASK_DILATE_FOR_ACCESSORIES = 2
+ACCESSORY_KEEP_COMPONENTS = 12
+ACCESSORY_MIN_COMPONENT_AREA_RATIO = 0.002
+USE_SEAMLESS_CLONE = False
+EDGE_HALO_COLOR_MATCH_STRENGTH = 0.38
+EDGE_HORIZON_BG_BLEND = 0.70
+EDGE_BG_CONTEXT_PAD = 18
+MAX_PERSON_PERSON_OVERLAP_RATIO = 0.08
+SMOKE_IMAGES = 10
 
 VARIANT_STRENGTHS = {
-    "add_single_pedestrian": 0.88,
-    "add_two_pedestrians": 0.90,
-    "add_small_group": 0.92,
-    "add_occluded_pedestrian": 0.90,
-    "add_distant_pedestrian": 0.82,
-    "add_near_pedestrian": 0.92,
+    "add_single_pedestrian": 0.72,
+    "add_two_pedestrians": 0.74,
+    "add_small_group": 0.76,
+    "add_occluded_pedestrian": 0.74,
+    "add_distant_pedestrian": 0.68,
+    "add_near_pedestrian": 0.76,
 }
 
 VARIANT_GUIDANCE_SCALES = {
-    "add_single_pedestrian": 8.0,
-    "add_two_pedestrians": 8.4,
-    "add_small_group": 8.6,
-    "add_occluded_pedestrian": 8.2,
-    "add_distant_pedestrian": 7.4,
-    "add_near_pedestrian": 8.6,
+    "add_single_pedestrian": 6.8,
+    "add_two_pedestrians": 6.9,
+    "add_small_group": 7.0,
+    "add_occluded_pedestrian": 6.8,
+    "add_distant_pedestrian": 6.6,
+    "add_near_pedestrian": 7.3,
 }
 
 VARIANT_NUM_INFERENCE_STEPS = {
-    "add_single_pedestrian": 38,
-    "add_two_pedestrians": 40,
-    "add_small_group": 42,
-    "add_occluded_pedestrian": 40,
-    "add_distant_pedestrian": 36,
-    "add_near_pedestrian": 42,
+    "add_single_pedestrian": 36,
+    "add_two_pedestrians": 36,
+    "add_small_group": 38,
+    "add_occluded_pedestrian": 36,
+    "add_distant_pedestrian": 34,
+    "add_near_pedestrian": 38,
 }
 ```
 
@@ -648,16 +662,16 @@ VARIANT_NUM_INFERENCE_STEPS = {
 
 ```python
 # Reject nếu crop thay đổi quá ít
-CONTEXT_MIN_GENERATED_MASK_DIFF = 0.035
+CONTEXT_MIN_GENERATED_MASK_DIFF = 0.003
 
 # Reject nếu YOLO mask quá nhỏ
-CONTEXT_MIN_PERSON_MASK_AREA_RATIO = 0.0012
+CONTEXT_MIN_PERSON_MASK_AREA_RATIO = 0.00045
 
 # Reject nếu final vẫn giống input
-CONTEXT_MIN_FINAL_PERSON_DIFF = 0.018
+CONTEXT_MIN_FINAL_PERSON_DIFF = 0.01
 
-# Retry tối đa 3 lần
-CONTEXT_GENERATION_RETRIES = 3
+# Retry tối đa 4 lần ở base config; smoke/quality/batch preset có thể override
+CONTEXT_GENERATION_RETRIES = 4
 ```
 
 ### 6.8 Kết quả V5 (hiện tại)
@@ -666,25 +680,26 @@ CONTEXT_GENERATION_RETRIES = 3
 - **Background giữ nguyên tuyệt đối**: chỉ paste person pixels, không paste cả vùng context
 - **Người sinh ra rõ ràng**: SD3.5 có context rộng để hiểu scene, nhưng output được cắt gọn
 - **Color matching**: người có màu/lighting đồng bộ với scene
+- **Edge matching hiện tại**: alpha paste mặc định, trim fringe 1px, inner-ring edge correction, và match màu viền bằng background pixels trong vùng local 10-20px quanh người thay vì toàn ảnh
 - **Tỉ lệ cải thiện**: scale theo reference person/car + perspective clamp
 - **Retry mechanism**: không lưu ảnh yếu, tự động thử lại
 - **Debug strip**: 5 panel (source | mask | generated | person_mask | final) để chẩn đoán
 
 **Vẫn đang cải thiện:**
-- Tỉ lệ người chưa hoàn hảo (cần thêm depth estimation)
-- Outline vẫn có thể lộ nếu YOLO-seg mask ăn cả nền
+- Tỉ lệ người vẫn cần tinh chỉnh thêm dù clean notebook đã có Depth Anything scale correction
+- Outline/halo vẫn cần kiểm tra thủ công, nhưng notebook hiện ưu tiên trim generated-background fringe và tắt seamlessClone mặc định để giảm halo
 - Retry rate còn cao với variant khó (occluded, group)
 - Semantic placement (SegFormer) chưa chạy ổn định trên Kaggle
 
 ---
 
-## TRANG 7: BẢNG SO SÁNH CHI TIẾT
+##  7: BẢNG SO SÁNH CHI TIẾT
 
 ### 7.1 So sánh kiến trúc
 
 | Tiêu chí | V1 Full Img2Img | V2 Patch Blend | V3 Human Mask | V4 BBox Inpaint | V5 Context Composite |
 |----------|-----------------|----------------|---------------|-----------------|---------------------|
-| **Pipeline core** | Img2Img toàn ảnh | Img2Img patch | Inpaint mask người | Inpaint bbox | Inpaint crop + YOLO-seg |
+| **Pipeline core** | Img2Img toàn ảnh | Img2Img patch | Inpaint mask người | Inpaint bbox | Img2Img context crop + YOLO-seg |
 | **Background preservation** | Kém (toàn ảnh đổi) | Tốt (ngoài patch) | Tốt (ngoài mask) | Tốt (ngoài mask) | Xuất sắc (chỉ paste người) |
 | **Pedestrian clarity** | Tốt | Kém (bóng mờ) | Kém (skeleton) | Tốt | Tốt |
 | **Scale accuracy** | Trung bình | Kém | Kém | Trung bình | Khá |
@@ -699,12 +714,12 @@ CONTEXT_GENERATION_RETRIES = 3
 | Parameter | V1 | V2 | V3 | V4 | V5 |
 |-----------|-----|-----|-----|-----|-----|
 | **Mode** | full_img2img | patch_blend | human_mask_inpaint | bbox_inpaint | context_person_composite |
-| **Strength range** | 0.52-0.62 | 0.62-0.76 | 0.36-0.50 | 0.70-0.84 | 0.82-0.92 |
-| **Guidance range** | 7.4-8.4 | 6.8-7.7 | 4.6-5.6 | 6.8-8.0 | 7.4-8.6 |
-| **Steps range** | 34-42 | 32-38 | 26-32 | 32-38 | 36-42 |
+| **Strength range** | 0.52-0.62 | 0.62-0.76 | 0.36-0.50 | 0.70-0.84 | 0.68-0.76 |
+| **Guidance range** | 7.4-8.4 | 6.8-7.7 | 4.6-5.6 | 6.8-8.0 | 6.6-7.3 |
+| **Steps range** | 34-42 | 32-38 | 26-32 | 32-38 | 34-38 |
 | **Mask type** | None | None | Human-shaped | Rounded rectangle | BBox + YOLO-seg |
-| **Composite method** | Full replace | Patch paste | Mask paste | Mask paste | Person-only paste |
-| **Context awareness** | Toàn ảnh | Patch local | Toàn ảnh | Toàn ảnh | Crop 2.4x |
+| **Composite method** | Full replace | Patch paste | Mask paste | Mask paste | Person-only alpha paste + local edge match |
+| **Context awareness** | Toàn ảnh | Patch local | Toàn ảnh | Toàn ảnh | Crop 3.4x |
 
 ### 7.3 So sánh prompt evolution
 
@@ -714,7 +729,7 @@ CONTEXT_GENERATION_RETRIES = 3
 | **V2** | "local edit, preserve background, road, buildings, cars, viewpoint" | Trung bình | Giữ background |
 | **V3** | "complete realistic full-body pedestrian inside mask, standing on road" | Dài | Full body + mask |
 | **V4** | "place pedestrian only inside masked box, full body, feet on road" | Trung bình | Đúng vị trí |
-| **V5** | "must add a new clearly visible realistic full-body pedestrian in the masked area" | Trung bình | Rõ ràng + mới |
+| **V5** | "urban street photo. Add one pedestrian in empty road or sidewalk. Keep scene unchanged. full body visible, grounded feet, natural scale, matching light" | Ngắn (<77 CLIP tokens) | Thêm người, giữ scene, tránh token overflow |
 
 ### 7.4 So sánh Smart Placement
 
@@ -730,7 +745,7 @@ CONTEXT_GENERATION_RETRIES = 3
 
 ---
 
-## TRANG 8: LỖI ĐÃ GẶP QUA CÁC PHIÊN BẢN
+##  8: LỖI ĐÃ GẶP QUA CÁC PHIÊN BẢN
 
 ### 8.1 Lỗi V1 → V2
 
@@ -783,7 +798,7 @@ CONTEXT_GENERATION_RETRIES = 3
 
 **Lỗi: CUDA OOM trên Kaggle T4**
 - Nguyên nhân: Load 2 SD3.5 pipeline cùng lúc trên 2 GPU
-- Cách fix: `enable_model_cpu_offload()`, giảm resolution 448, dùng `low_cpu_mem_usage=True`
+- Cách fix: `enable_model_cpu_offload()`, dùng resolution 512 trong clean notebook, và dùng `low_cpu_mem_usage=True`
 
 **Lỗi: Text encoder trên CPU**
 - Nguyên nhân: `encode_prompt()` đưa tensor lên GPU nhưng text_encoder chưa `.to(device)`
@@ -799,7 +814,7 @@ CONTEXT_GENERATION_RETRIES = 3
 
 ---
 
-## TRANG 9: INSIGHT KỸ THUẬT QUAN TRỌNG
+##  9: INSIGHT KỸ THUẬT QUAN TRỌNG
 
 ### 9.1 Insight #1: "Prompt không đủ mạnh để bảo toàn background"
 
@@ -850,13 +865,13 @@ Thay vì cố tìm parameters "sinh 100% đẹp", nên:
 
 ---
 
-## TRANG 10: KẾ HOẠCH TIẾP THEO
+##  10: KẾ HOẠCH TIẾP THEO
 
 ### 10.1 Cải thiện V5 hiện tại
 
 **Ưu tiên 1: Tỉ lệ người chính xác hơn**
-- Thêm depth estimation (MiDaS/Depth Anything) để biết chính xác khoảng cách
-- Dùng depth map để scale người thay vì chỉ dùng ground_y
+- Tinh chỉnh Depth Anything scale correction đã có trong clean notebook
+- Dùng reject histogram và quality score để chỉnh soft/hard scale thresholds
 - Hoặc dùng camera calibration từ CityPersons nếu có
 
 **Ưu tiên 2: Giảm outline artifacts**
@@ -915,79 +930,9 @@ Nếu:
 
 ---
 
-## TRANG 11: THÔNG TIN KỸ THUẬT BỔ SUNG
+##  11: PHỤ LỤC - CODE EVOLUTION
 
-### 11.1 File structure hiện tại
-
-```
-Project/
-├── .codex/                          # Vibecode Kit v6
-├── Dataset/
-│   ├── train/images/               # 7025 ảnh
-│   ├── train/labels/               # 7025 labels
-│   ├── valid/images/               # 289 ảnh
-│   ├── valid/labels/               # 289 labels
-│   ├── test/images/                # 294 ảnh
-│   ├── test/labels/                # 294 labels
-│   └── data.yaml
-├── notebooks/
-│   ├── citypersons_sd35_lora_kaggle.ipynb              # Gốc
-│   ├── citypersons_sd35_lora_kaggle_comparison_pairs.ipynb  # V5 hiện tại
-│   ├── eda_archive_kaggle.ipynb                        # EDA
-│   ├── sd3-5.ipynb                                     # BDD100K
-│   └── trainsd3-5.ipynb                               # BDD100K gọn
-├── scripts/
-│   └── sd35_eval_guided_augmentation.py               # CLI pipeline
-├── requirements-sd35-eval.txt
-├── SD35_EVAL_GUIDED_PIPELINE.md
-├── report_sang_den_gio.txt
-└── report_citypersons_sd35_chat_history_insights.txt   # Lịch sử chat
-```
-
-### 11.2 Dependencies chính
-
-```
-torch>=2.0.0
-diffusers>=0.30.0
-transformers>=4.40.0
-accelerate>=0.30.0
-peft>=0.11.0
-bitsandbytes>=0.43.0
-ultralytics>=8.2.0       # YOLOv8-seg
-Pillow>=10.0.0
-numpy>=1.24.0
-matplotlib>=3.7.0
-opencv-python>=4.8.0
-scikit-image>=0.21.0     # SSIM/LPIPS
-```
-
-### 11.3 Kaggle-specific notes
-
-- T4 x2: 16GB VRAM mỗi GPU
-- Cần Hugging Face token cho SD3.5 Medium
-- Internet ON để tải model
-- `HF_HOME` nên đặt `/tmp/huggingface` để tránh bloat output
-- Restart session giữa các lần chạy để dọn VRAM
-
-### 11.4 Performance estimate (V5)
-
-```
-10 ảnh smoke test: ~10-15 phút (T4 x2)
-40 ảnh: ~40-60 phút
-200 ảnh: ~3-4 giờ
-600 ảnh full: ~8-10 giờ
-```
-
-Thời gian chủ yếu ở:
-- SD3.5 inpaint: ~50-60s/ảnh
-- YOLO-seg: ~1-2s/ảnh
-- Color match + composite: ~1s/ảnh
-
----
-
-## TRANG 12: PHỤ LỤC - CODE EVOLUTION
-
-### 12.1 V1 → V2: Từ full image sang patch
+### 11.1 V1 → V2: Từ full image sang patch
 
 ```python
 # V1
@@ -1003,7 +948,7 @@ result.paste(aug_patch, patch_bbox[:2], feather_mask(...))
 result.save(output_path)
 ```
 
-### 12.2 V2 → V3: Từ patch sang inpaint
+### 11.2 V2 → V3: Từ patch sang inpaint
 
 ```python
 # V2 (img2img patch)
@@ -1016,7 +961,7 @@ result = source.copy()
 result.paste(generated, (0, 0), mask_image)
 ```
 
-### 12.3 V3 → V4: Từ human mask sang bbox mask
+### 11.3 V3 → V4: Từ human mask sang bbox mask
 
 ```python
 # V3
@@ -1026,7 +971,7 @@ mask_image = human_mask_for_bbox(source.size, insert_bbox, variant)
 mask_image = bbox_mask_for_bbox(source.size, insert_bbox, variant)
 ```
 
-### 12.4 V4 → V5: Từ mask paste sang person-only composite
+### 11.4 V4 → V5: Từ mask paste sang person-only composite
 
 ```python
 # V4
@@ -1057,7 +1002,7 @@ Dự án SD3.5 CityPersons Augmentation đã trải qua 5 phiên bản pipeline,
 **Hướng đúng đã được xác định:** Tách biệt nhiệm vụ, không bắt một model làm tất cả.
 
 **Việc cần làm tiếp:**
-1. Cải thiện tỉ lệ người (depth estimation)
+1. Cải thiện tỉ lệ người bằng cách tinh chỉnh depth-based scale correction
 2. Giảm outline artifacts (SAM matting)
 3. Hoàn thiện evaluator integration
 4. Chạy batch lớn và đo downstream mAP

@@ -65,12 +65,14 @@ The project uses multiple compositing steps to reduce pasted-looking artifacts:
 - edge feathering;
 - color harmonization;
 - local brightness matching;
-- edge halo color matching;
+- edge halo color matching from background pixels within a tight local band around the inserted person;
+- horizontal-row mean matching inside the local paste context, not across the whole image;
+- light mask-fringe trimming before paste to remove generated-background pixels;
 - shadow synthesis;
-- `seamlessClone` when the mask and scene support it;
-- alpha fallback when seamless cloning is not reliable.
+- alpha paste as the current default;
+- optional `seamlessClone` support remains in the notebook, but it is disabled by default because it can create halo artifacts.
 
-The goal is not perfect image editing. The goal is to produce training images where the added pedestrian is realistic enough and does not corrupt the original annotation context.
+The goal is not perfect image editing. The goal is to produce training images where the added pedestrian is realistic enough and does not corrupt the original annotation context. The current notebook prioritizes reducing visible edge mismatch over preserving every generated boundary pixel.
 
 ## 6. YOLO-Guided Validation
 
@@ -86,6 +88,18 @@ It supports:
 - manifest metadata.
 
 The pipeline does not assume every generated image is useful. It rejects weak samples and retries under a controlled budget.
+
+Current mask-related defaults:
+
+```python
+CONTEXT_PERSON_MASK_THRESHOLD = 0.40
+PERSON_MASK_TRIM_FRINGE_PIXELS = 1
+PERSON_MASK_DILATE_FOR_ACCESSORIES = 2
+ACCESSORY_KEEP_COMPONENTS = 12
+ACCESSORY_MIN_COMPONENT_AREA_RATIO = 0.002
+USE_SEAMLESS_CLONE = False
+SMOKE_IMAGES = 10
+```
 
 ## 7. Quality Score
 

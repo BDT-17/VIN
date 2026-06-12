@@ -17,7 +17,7 @@ Model được dùng cho **inference/img2img augmentation**, kết hợp với Y
 
 Bài toán không phải là sinh ảnh tự do từ prompt, mà là **augmentation dataset cho pedestrian detection**. Model cần tạo ra pedestrian mới trong ảnh CityPersons nhưng không được phá hỏng background gốc.
 
-Pipeline hiện tại giải quyết bài toán theo hướng **V3 Context-Person Composite**:
+Pipeline hiện tại giải quyết bài toán theo hướng **V5 Context-Person Composite**:
 
 1. SD3.5 Medium sinh candidate pedestrian bằng img2img.
 2. YOLOv8m-seg segment người mới.
@@ -52,7 +52,7 @@ Trong notebook hiện tại, model chạy được trên Kaggle T4 bằng các k
 - model CPU offload;
 - VAE slicing/tiling;
 - attention slicing;
-- resolution 448x448;
+- resolution 512x512;
 - batch size nhỏ theo từng sample;
 - retry có kiểm soát.
 
@@ -91,7 +91,7 @@ SD3.5 Medium phù hợp vì:
 - chạy được nhiều attempts trên T4;
 - dễ kết hợp với segmentation-composite architecture.
 
-Trong pipeline V3, background preservation không giao hoàn toàn cho model. Thay vào đó, background được bảo toàn bằng kiến trúc composite. Model chỉ cần sinh candidate pedestrian đủ tốt để segment và paste.
+Trong pipeline V5, background preservation không giao hoàn toàn cho model. Thay vào đó, background được bảo toàn bằng kiến trúc composite. Model chỉ cần sinh candidate pedestrian đủ tốt để segment và paste.
 
 ### 2.5. Practical hơn FLUX trong môi trường Kaggle
 
@@ -142,6 +142,6 @@ Stable Diffusion 3.5 Medium BF16/FP16 là lựa chọn phù hợp nhất cho pip
 - phù hợp với img2img object insertion;
 - giữ bố cục tốt hơn trong constraint hiện tại;
 - practical hơn FLUX cho batch augmentation;
-- tương thích tốt với V3 Context-Person Composite.
+- tương thích tốt với V5 Context-Person Composite.
 
 Do hiện tại không còn LoRA/fine-tuning, lựa chọn model được đánh giá theo hướng **inference quality, controllability và deployment practicality**. Trong các lựa chọn đã khảo sát, SD3.5 Medium BF16/FP16 là điểm cân bằng tốt nhất giữa chất lượng, tốc độ, khả năng kiểm soát, và tính thực dụng cho CityPersons pedestrian augmentation.
