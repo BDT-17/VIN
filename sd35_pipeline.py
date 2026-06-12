@@ -392,6 +392,13 @@ def apply_subtle_scene_tone_filter(source_crop, person_rgb, person_mask):
 def harmonize_person_to_scene(source_crop, person_rgb, person_mask):
     person_rgb = color_match_person_crop(source_crop, person_rgb, person_mask)
     person_rgb = match_person_texture_to_scene(source_crop, person_rgb, person_mask)
+    # Activate existing helpers for fuller edge harmonization.
+    # All use foreground_harmonization_alpha: strong at edge, weak in core.
+    person_rgb = local_color_transfer(source_crop, person_rgb, person_mask, strength=0.45)
+    person_rgb = match_local_brightness(source_crop, person_rgb, person_mask, strength=0.50)
+    person_rgb = match_local_contrast(source_crop, person_rgb, person_mask, strength=0.35)
+    person_rgb = match_local_saturation(source_crop, person_rgb, person_mask, strength=0.30)
+    person_rgb = add_sensor_noise(source_crop, person_rgb, person_mask, strength=0.80)
     person_rgb = apply_subtle_scene_tone_filter(source_crop, person_rgb, person_mask)
     person_rgb = neutralize_person_edge_halo(source_crop, person_rgb, person_mask)
     person_rgb = soften_dark_person_edge(source_crop, person_rgb, person_mask)
@@ -613,8 +620,8 @@ def match_pasted_edge_to_composite_mean(result_crop, person_mask):
     arr = np.asarray(result_crop.convert("RGB"), dtype=np.float32)
     blurred = np.asarray(result_crop.convert("RGB").filter(ImageFilter.GaussianBlur(radius=0.45)), dtype=np.float32)
     local_mean = blended_background_mean_map(result_crop, person_mask)
-    softened = arr * 0.52 + blurred * 0.48
-    mean_matched = softened * 0.55 + local_mean * 0.45
+    softened = arr * 0.38 + blurred * 0.62
+    mean_matched = softened * 0.42 + local_mean * 0.58
     edge_alpha_3 = np.expand_dims(np.clip(edge_alpha, 0.0, 1.0), axis=2)
     matched = arr * (1.0 - edge_alpha_3) + mean_matched * edge_alpha_3
     return Image.fromarray(np.clip(matched, 0, 255).astype(np.uint8), mode="RGB")
