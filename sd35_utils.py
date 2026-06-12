@@ -129,6 +129,17 @@ def bbox_intersection_area(a, b):
     return max(0, min(ax2, bx2) - max(ax1, bx1)) * max(0, min(ay2, by2) - max(ay1, by1))
 
 
+def union_bboxes(bboxes):
+    if not bboxes:
+        return None
+    return (
+        min(float(bbox[0]) for bbox in bboxes),
+        min(float(bbox[1]) for bbox in bboxes),
+        max(float(bbox[2]) for bbox in bboxes),
+        max(float(bbox[3]) for bbox in bboxes),
+    )
+
+
 def person_overlap_depth_ok(front_bbox, occluded_bbox):
     """Allow overlap only when the occluded person is plausibly behind the pasted one."""
     inter = bbox_intersection_area(front_bbox, occluded_bbox)
@@ -1441,5 +1452,4 @@ def validate_pasted_person_mask(pasted_mask, variant, insert_bbox, resolution=RE
         opaque_ratio = float(np.mean(mask_arr[active] > 0.72))
         if opaque_ratio < MIN_ACCEPTED_MASK_OPAQUE_RATIO:
             raise RuntimeError(f"Accepted person mask is too soft/transparent (opaque_ratio={opaque_ratio:.2f}).")
-
 
