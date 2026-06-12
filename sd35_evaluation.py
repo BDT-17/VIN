@@ -418,12 +418,12 @@ def build_retry_config(base_prompt, base_negative, reject_reason, strength, guid
     elif reject_reason == "not_enough_new_people":
         attempt_strength = min(0.86, attempt_strength + 0.03)
         attempt_guidance = min(8.4, attempt_guidance + 0.30)
-        attempt_prompt += ", separate people"
-        attempt_negative += ", missing person, merged bodies"
+        attempt_prompt += ", all people separate, visible gaps, distinct bodies"
+        attempt_negative += ", missing person, merged bodies, fused bodies, overlapping people"
     elif reject_reason == "bad_person_depth_overlap":
         attempt_strength = max(0.62, attempt_strength - 0.02)
-        attempt_prompt += ", separated depth"
-        attempt_negative += ", overlap, merged people"
+        attempt_prompt += ", separated depth, no body overlap, distinct silhouettes"
+        attempt_negative += ", overlap, merged people, fused bodies, person on person"
     elif reject_reason == "floating_or_bad_ground":
         attempt_prompt += ", feet on road"
         attempt_negative += ", floating, on vehicle"

@@ -101,6 +101,8 @@ def build_caption(path, bucket, caption_map, metadata=None, include_weather=True
 def build_generation_prompt(record, variant):
     variant_prompt = VARIANT_PROMPTS[variant]
     placement_clause = "in an empty road or sidewalk area"
+    if variant in {"add_two_pedestrians", "add_small_group"}:
+        placement_clause = "side by side in an empty road or sidewalk area, not overlapping"
     if variant == "add_occluded_pedestrian":
         placement_clause = "with realistic occlusion"
     return (

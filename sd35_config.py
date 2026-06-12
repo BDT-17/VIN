@@ -427,22 +427,22 @@ PATCH_DEBUG_DIR = OUTPUT_DIR / "patch_debug"
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 BASE_CAPTION = "urban street photo"
-PRESERVATION_PROMPT = "full body visible, grounded feet, natural scale, matching light"
+PRESERVATION_PROMPT = "clear full body, separated silhouette, grounded feet, natural scale"
 
 SCENE_PROMPTS = {
     "urban_pedestrian_scene": "urban street photo",
 }
 
 VARIANT_PROMPTS = {
-    "add_single_pedestrian": "one pedestrian",
-    "add_two_pedestrians": "two pedestrians",
-    "add_small_group": "three pedestrians",
-    "add_occluded_pedestrian": "partly occluded pedestrian behind foreground object",
-    "add_distant_pedestrian": "distant visible pedestrian",
-    "add_near_pedestrian": "near larger pedestrian",
+    "add_single_pedestrian": "one clear full-body pedestrian",
+    "add_two_pedestrians": "two separate full-body pedestrians with visible gap",
+    "add_small_group": "three separate full-body pedestrians with visible gaps",
+    "add_occluded_pedestrian": "partly occluded full-body pedestrian behind foreground object",
+    "add_distant_pedestrian": "distant clear full-body pedestrian",
+    "add_near_pedestrian": "near larger full-body pedestrian",
 }
 
-NEGATIVE_PROMPT = "cropped, missing head, missing legs, thin body, giant, closeup, floating, ghost, bad perspective, hard seam"
+NEGATIVE_PROMPT = "cropped, missing head, missing legs, thin body, giant, closeup, floating, ghost, bad perspective, hard seam, overlap, merged people, fused bodies"
 
 
 def ensure_output_dirs():
