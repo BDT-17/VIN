@@ -1,8 +1,8 @@
 # CityPersons Pedestrian Augmentation With SD3.5
 
-Notebook nghiên cứu để tạo ảnh augmentation cho pedestrian detection bằng **Stable Diffusion 3.5 Medium** và **YOLOv8m-seg**.
+Research baseline for CityPersons pedestrian augmentation using **Stable Diffusion 3.5 Medium** and **YOLOv8m-seg**.
 
-Pipeline hiện tại là **V5 context-person-composite bằng img2img**:
+Current pipeline: **V5 context-person-composite with img2img**.
 
 ```text
 Dataset scanner
@@ -15,55 +15,98 @@ Dataset scanner
 -> Image outputs + manifest
 ```
 
-## File Chính
+## Main Files
 
-- `sd35_run.ipynb`: runner notebook gọn để chạy project khi các module `.py` đã có sẵn.
-- `sd3.5-agumentation-scale-correction-clean.ipynb`: notebook self-contained cho Kaggle, có các cell `%%writefile` để tự ghi module vào `/kaggle/working`.
-- `sd35_config.py`: cấu hình.
-- `sd35_data.py`: scan dataset và preview.
-- `sd35_utils.py`: preprocessing, placement, mask, scale/depth helpers.
-- `sd35_model.py`: load SD3.5 pipelines.
+- `sd35_run.ipynb`: short Kaggle runner. It clones/pulls this GitHub repo and imports the modules from the cloned repo.
+- `sd3.5-agumentation-scale-correction-clean.ipynb`: self-contained Kaggle notebook. It writes the Python modules to `/kaggle/working` with `%%writefile`, then imports and runs them.
+- `sd35_config.py`: configuration.
+- `sd35_data.py`: dataset scan and preview.
+- `sd35_utils.py`: preprocessing, placement, masks, scale/depth helpers.
+- `sd35_model.py`: SD3.5 pipeline loading.
 - `sd35_evaluation.py`: YOLO-seg, validation, retry policy.
 - `sd35_pipeline.py`: generation, paste, edge correction, compositing.
-- `sd35_runner.py`: build jobs, chạy augmentation, manifest, autotune, export.
+- `sd35_runner.py`: job building, augmentation runner, manifest, autotune, export.
 
-## Cách Chạy Trên Kaggle
+## Run On Kaggle
 
-### Cách 1: Runner Gọn
+### Recommended: Clone-Based Runner
 
-Dùng `sd35_run.ipynb` nếu bạn upload/copy cả các file `sd35_*.py` lên cùng working directory.
+Open a new Kaggle notebook with Internet ON and GPU enabled, then use `sd35_run.ipynb`.
 
-Chạy lần lượt các cell:
+The runner does this automatically:
+
+```python
+REPO_URL = "https://github.com/BDT-17/VIN.git"
+REPO_DIR = Path("/kaggle/working/VIN")
+
+if REPO_DIR.exists():
+    %cd /kaggle/working/VIN
+    !git pull
+else:
+    !git clone {REPO_URL} {REPO_DIR}
+    %cd /kaggle/working/VIN
+
+PROJECT_DIR = REPO_DIR / "notebooks"
+if not (PROJECT_DIR / "sd35_config.py").exists():
+    PROJECT_DIR = REPO_DIR
+
+%cd {PROJECT_DIR}
+```
+
+Then it imports the modules from `PROJECT_DIR`:
+
+```python
+from sd35_config import *
+from sd35_data import *
+from sd35_utils import *
+from sd35_model import *
+from sd35_evaluation import *
+from sd35_pipeline import *
+from sd35_runner import *
+```
+
+You do **not** need to upload or copy `sd35_*.py` manually when using this workflow.
+
+Run the notebook cells in order:
 
 ```text
 1. Install Dependencies
-2. Autoreload And Imports
-3. Runtime Check
-4. Hugging Face Login
-5. Dataset Scan
-6. Smoke Run
-7. Export Outputs nếu cần
+2. Clone Or Update Repo
+3. Autoreload And Imports
+4. Runtime Check
+5. Hugging Face Login
+6. Dataset Scan
+7. Smoke Run
+8. Export Outputs, optional
 ```
 
-Runner sẽ import module từ `Path.cwd()` hoặc `/kaggle/working`.
+### Alternative: Self-Contained Notebook
 
-### Cách 2: Notebook Self-Contained
+Use `sd3.5-agumentation-scale-correction-clean.ipynb` if you want to upload a single notebook only. This notebook embeds the module source in `%%writefile` cells and writes modules into `/kaggle/working` before importing them.
 
-Dùng `sd3.5-agumentation-scale-correction-clean.ipynb` nếu bạn muốn upload một notebook duy nhất. Notebook này sẽ ghi các module Python vào `/kaggle/working` bằng `%%writefile`, sau đó import và chạy.
+## Dataset
 
-## Cấu Hình Quan Trọng
+The dataset is not stored in this repo. Add the CityPersons Kaggle dataset as notebook input. The config searches common Kaggle paths under `/kaggle/input`.
 
-Chỉnh trong `sd35_config.py` hoặc trong cell `%%writefile /kaggle/working/sd35_config.py` của notebook self-contained.
+## Important Configuration
+
+Edit `sd35_config.py` for clone-based runs, or edit the `%%writefile /kaggle/working/sd35_config.py` cell in the self-contained notebook.
 
 ```python
 RUN_PRESET = "batch"  # smoke | quality | batch
 PARAMETER_OVERRIDES = {}
 USE_ALL_GPUS_FOR_AUGMENTATION = True
 CONTEXT_PERSON_GENERATION_PIPELINE = "img2img"
-SMOKE_IMAGES = 10
 ```
 
-Các default chính:
+Smoke run defaults:
+
+```python
+SMOKE_IMAGES = 10
+SMOKE_SPLITS = ["train"]
+```
+
+Main defaults:
 
 - `BACKGROUND_PRESERVATION_MODE = "context_person_composite"`
 - `CONTEXT_PERSON_GENERATION_PIPELINE = "img2img"`
@@ -75,7 +118,7 @@ Các default chính:
 
 ## Edge Handling
 
-Sau khi paste người vào ảnh, pipeline mới lấy crop kết quả rồi chỉnh viền:
+The pipeline applies edge correction **after** the person has been pasted:
 
 ```text
 paste person
@@ -85,11 +128,11 @@ paste person
 -> paste corrected crop back
 ```
 
-Hiện edge correction chỉ dùng **horizontal mean**, không trộn local mean.
+Current edge correction uses **horizontal mean only**. It does not blend local mean.
 
 ## GPU Memory
 
-Runner xử lý từng device tuần tự để giữ VRAM ổn định trên Kaggle T4:
+The runner processes devices sequentially to keep VRAM stable on Kaggle T4:
 
 ```text
 load pipeline -> run shard -> del pipe -> clear_cuda() -> next device
@@ -97,7 +140,7 @@ load pipeline -> run shard -> del pipe -> clear_cuda() -> next device
 
 ## Outputs
 
-Notebook tạo:
+The run can produce:
 
 - augmented images;
 - comparison pairs;
@@ -106,8 +149,8 @@ Notebook tạo:
 - rejection histogram;
 - quality metrics;
 - autotune snapshots;
-- optional zip artifact từ `export_outputs()`.
+- optional zip artifact from `export_outputs()`.
 
-## Trạng Thái
+## Status
 
-Đây là research baseline, tập trung vào scale correction, grounding, occlusion ordering, blending, validation và autotune. Chưa phải production augmentation pipeline.
+This is a research baseline focused on scale correction, grounding, occlusion ordering, blending, validation, and autotune. It is not a production augmentation service.
