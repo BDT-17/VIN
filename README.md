@@ -80,6 +80,16 @@ Run the notebook cells in order:
 8. Export Outputs, optional
 ```
 
+For Hugging Face access, add a Kaggle secret named `HF_TOKEN` before running the login cell:
+
+```text
+Kaggle Notebook -> Add-ons -> Secrets -> Add secret
+Name: HF_TOKEN
+Value: your Hugging Face access token
+```
+
+The notebooks read this secret with `UserSecretsClient().get_secret("HF_TOKEN")` and call `login(token=hf_token)`. For local runs, you can alternatively set an environment variable named `HF_TOKEN`.
+
 ### Alternative: Self-Contained Notebook
 
 Use `sd3.5-agumentation-scale-correction-clean.ipynb` if you want to upload a single notebook only. This notebook embeds the module source in `%%writefile` cells and writes modules into `/kaggle/working` before importing them.
