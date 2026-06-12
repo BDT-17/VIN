@@ -2,110 +2,102 @@
 
 Notebook nghiên cứu để tạo ảnh augmentation cho pedestrian detection bằng **Stable Diffusion 3.5 Medium** và **YOLOv8m-seg**.
 
-Notebook chính:
-
-```text
-sd3.5-agumentation-scale-correction-clean.ipynb
-```
-
-## Mục Tiêu
-
-Pipeline chèn thêm pedestrian vào ảnh street-scene nhưng giữ background gốc. SD3.5 sinh candidate, YOLOv8m-seg tách mask người, sau đó chỉ phần pedestrian được composite lại vào ảnh gốc.
-
-## Pipeline
+Pipeline hiện tại là **V5 context-person-composite bằng img2img**:
 
 ```text
 Dataset scanner
--> Placement selection
--> SD3.5 img2img / inpaint generation
+-> Context crop img2img generation
 -> YOLO person segmentation
 -> Scale correction
 -> Edge / color / brightness / shadow blending
--> Occlusion-aware compositing
+-> Person-only alpha composite
 -> YOLO validation + retry
 -> Image outputs + manifest
 ```
 
-## Notebook Flow
+## File Chính
+
+- `sd35_run.ipynb`: runner notebook gọn để chạy project khi các module `.py` đã có sẵn.
+- `sd3.5-agumentation-scale-correction-clean.ipynb`: notebook self-contained cho Kaggle, có các cell `%%writefile` để tự ghi module vào `/kaggle/working`.
+- `sd35_config.py`: cấu hình.
+- `sd35_data.py`: scan dataset và preview.
+- `sd35_utils.py`: preprocessing, placement, mask, scale/depth helpers.
+- `sd35_model.py`: load SD3.5 pipelines.
+- `sd35_evaluation.py`: YOLO-seg, validation, retry policy.
+- `sd35_pipeline.py`: generation, paste, edge correction, compositing.
+- `sd35_runner.py`: build jobs, chạy augmentation, manifest, autotune, export.
+
+## Cách Chạy Trên Kaggle
+
+### Cách 1: Runner Gọn
+
+Dùng `sd35_run.ipynb` nếu bạn upload/copy cả các file `sd35_*.py` lên cùng working directory.
+
+Chạy lần lượt các cell:
 
 ```text
-1. Install
-2. Runtime Check
-3. HF Login
-4. Configuration
-5. Imports / Prompts
-6. Dataset Scanner
-7. Preview
-8. Image Preprocessing
-10. Img2Img Augmentation Pipeline
-11. First Run
-12. Metrics
+1. Install Dependencies
+2. Autoreload And Imports
+3. Runtime Check
+4. Hugging Face Login
+5. Dataset Scan
+6. Smoke Run
+7. Export Outputs nếu cần
 ```
 
-## Cấu Hình Chính
+Runner sẽ import module từ `Path.cwd()` hoặc `/kaggle/working`.
 
-Chỉnh cấu hình trong section `## 4. Configuration`.
+### Cách 2: Notebook Self-Contained
 
-Các biến quan trọng:
+Dùng `sd3.5-agumentation-scale-correction-clean.ipynb` nếu bạn muốn upload một notebook duy nhất. Notebook này sẽ ghi các module Python vào `/kaggle/working` bằng `%%writefile`, sau đó import và chạy.
+
+## Cấu Hình Quan Trọng
+
+Chỉnh trong `sd35_config.py` hoặc trong cell `%%writefile /kaggle/working/sd35_config.py` của notebook self-contained.
 
 ```python
 RUN_PRESET = "batch"  # smoke | quality | batch
 PARAMETER_OVERRIDES = {}
 USE_ALL_GPUS_FOR_AUGMENTATION = True
+CONTEXT_PERSON_GENERATION_PIPELINE = "img2img"
+SMOKE_IMAGES = 10
 ```
 
-Smoke test hiện chạy:
+Các default chính:
 
-```python
-SMOKE_IMAGES = 20
-SMOKE_SPLITS = ["train"]
-```
+- `BACKGROUND_PRESERVATION_MODE = "context_person_composite"`
+- `CONTEXT_PERSON_GENERATION_PIPELINE = "img2img"`
+- `RESOLUTION = 512`
+- `USE_T5 = False`
+- `USE_SEAMLESS_CLONE = False`
+- `CONTEXT_PERSON_MASK_THRESHOLD = 0.40`
+- `PERSON_MASK_TRIM_FRINGE_PIXELS = 1`
 
-## Quality Score
+## Edge Handling
 
-Notebook tính quality score từ 4 nhóm metric:
-
-```python
-quality_score = (
-    0.45 * person_score
-    + 0.25 * scale_score
-    + 0.20 * background_score
-    + 0.10 * edge_score
-)
-```
-
-Score này dùng để phân tích output và gợi ý autotune.
-
-## Autotune
-
-Autotune mặc định là dry-run, tức là chỉ in report và lưu snapshot, không tự đổi runtime config.
-
-```python
-autotune_report = autotune_from_last_run(apply=True, dry_run=True)
-```
-
-Muốn apply thật sau khi xem report:
-
-```python
-autotune_report = autotune_from_last_run(apply=True, dry_run=False)
-```
-
-Muốn khôi phục runtime config về default trong notebook:
-
-```python
-reset_runtime_config()
-```
-
-Snapshot autotune được lưu trong:
+Sau khi paste người vào ảnh, pipeline mới lấy crop kết quả rồi chỉnh viền:
 
 ```text
-autotune_snapshots/
+paste person
+-> crop pasted result
+-> horizontal-row background mean around person
+-> blur/mean edge correction
+-> paste corrected crop back
 ```
 
+Hiện edge correction chỉ dùng **horizontal mean**, không trộn local mean.
+
+## GPU Memory
+
+Runner xử lý từng device tuần tự để giữ VRAM ổn định trên Kaggle T4:
+
+```text
+load pipeline -> run shard -> del pipe -> clear_cuda() -> next device
+```
 
 ## Outputs
 
-Notebook tạo các output chính:
+Notebook tạo:
 
 - augmented images;
 - comparison pairs;
@@ -113,8 +105,9 @@ Notebook tạo các output chính:
 - manifest rows;
 - rejection histogram;
 - quality metrics;
-- autotune snapshots.
+- autotune snapshots;
+- optional zip artifact từ `export_outputs()`.
 
 ## Trạng Thái
 
-Đây là research baseline trong notebook, tập trung vào scale correction, grounding, occlusion ordering, blending, validation và autotune. Chưa phải production augmentation pipeline.
+Đây là research baseline, tập trung vào scale correction, grounding, occlusion ordering, blending, validation và autotune. Chưa phải production augmentation pipeline.
