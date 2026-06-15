@@ -53,6 +53,7 @@ ADDIT_MASK_EXPANSION_RATIO  = 1.15        # expand bbox by this ratio for mask
 ADDIT_NUM_INFERENCE_STEPS = 36
 ADDIT_GUIDANCE_SCALE      = 7.0
 ADDIT_SEED                = 42
+ADDIT_FALLBACK_TO_NATIVE_IMG2IMG = True  # keep smoke runs useful if custom denoise fails
 
 # Per-variant overrides (mirroring parent VARIANT_PROFILE structure).
 ADDIT_VARIANT_OVERRIDES = {

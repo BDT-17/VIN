@@ -39,6 +39,7 @@ try:
         ADDIT_DEBUG_DIR,
         ADDIT_DEBUG_MAX_ITEMS,
         ADDIT_GUIDANCE_SCALE,
+        ADDIT_FALLBACK_TO_NATIVE_IMG2IMG,
         ADDIT_MASK_DILATION_LATENT,
         ADDIT_MASK_EXPANSION_RATIO,
         ADDIT_MAX_RETRIES,
@@ -83,6 +84,7 @@ except ImportError:
         ADDIT_DEBUG_DIR,
         ADDIT_DEBUG_MAX_ITEMS,
         ADDIT_GUIDANCE_SCALE,
+        ADDIT_FALLBACK_TO_NATIVE_IMG2IMG,
         ADDIT_MASK_DILATION_LATENT,
         ADDIT_MASK_EXPANSION_RATIO,
         ADDIT_MAX_RETRIES,
@@ -403,6 +405,36 @@ class AddItCityPersonsPipeline:
         result_image = decode_latent_to_image(self.vae, latent)
         return result_image
 
+    def _native_img2img_fallback(
+        self,
+        source_image: Image.Image,
+        target_prompt: str,
+        negative_prompt: str,
+        strength: float,
+        guidance_scale: float,
+        num_inference_steps: int,
+        seed: int,
+        device,
+    ) -> Image.Image:
+        """Fallback through the public diffusers pipeline API.
+
+        This does not use extended attention or latent blending, but it keeps
+        Kaggle smoke tests productive when a diffusers internals mismatch makes
+        the custom denoising loop fail.
+        """
+        generator_device = device if str(device).startswith("cuda") else "cpu"
+        generator = torch.Generator(device=generator_device).manual_seed(seed)
+        result = self.pipe(
+            prompt=target_prompt,
+            negative_prompt=negative_prompt,
+            image=source_image,
+            strength=strength,
+            guidance_scale=guidance_scale,
+            num_inference_steps=num_inference_steps,
+            generator=generator,
+        )
+        return result.images[0].resize(source_image.size)
+
     # ------------------------------------------------------------------
     # Single-image entry point
     # ------------------------------------------------------------------
@@ -471,7 +503,24 @@ class AddItCityPersonsPipeline:
                 print(f"  Add-it denoise failed (attempt {attempt + 1}): "
                       f"{type(exc).__name__}: {exc}")
                 traceback.print_exc(limit=6)
-                continue
+                if not ADDIT_FALLBACK_TO_NATIVE_IMG2IMG:
+                    continue
+                print("  Falling back to native SD3 img2img for this attempt.")
+                try:
+                    result_image = self._native_img2img_fallback(
+                        source_image=source_resized,
+                        target_prompt=target_prompt,
+                        negative_prompt=negative_prompt,
+                        strength=strength,
+                        guidance_scale=guidance,
+                        num_inference_steps=steps,
+                        seed=attempt_seed,
+                        device=device,
+                    )
+                except Exception as fallback_exc:
+                    print(f"  Native fallback failed: {type(fallback_exc).__name__}: {fallback_exc}")
+                    traceback.print_exc(limit=6)
+                    continue
 
             # Validate with YOLO (lightweight check)
             is_valid, reject_reason = self._quick_validate(
