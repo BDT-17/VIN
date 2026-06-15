@@ -40,6 +40,8 @@ from addit_reference import (
 )
 
 
+ADDIT_REFERENCE_ENABLED = bool(globals().get("ADDIT_REFERENCE_ENABLED", True))
+ADDIT_FALLBACK_TO_HEURISTIC = bool(globals().get("ADDIT_FALLBACK_TO_HEURISTIC", True))
 ADDIT_FINAL_RETRY_REASONS = set(globals().get("ADDIT_REFERENCE_RETRY_REASONS", {
     "wrong_scale",
     "cropped_person",
@@ -55,17 +57,11 @@ ADDIT_FINAL_RETRY_REASONS = set(globals().get("ADDIT_REFERENCE_RETRY_REASONS", {
 
 
 def addit_reference_enabled():
-    config = globals().get("EFFECTIVE_CONFIG", {})
-    if isinstance(config, dict) and "ADDIT_REFERENCE_ENABLED" in config:
-        return bool(config["ADDIT_REFERENCE_ENABLED"])
-    return bool(globals().get("ADDIT_CONFIG", {}).get("ADDIT_REFERENCE_ENABLED", True))
+    return bool(globals().get("ADDIT_REFERENCE_ENABLED", ADDIT_REFERENCE_ENABLED))
 
 
 def addit_fallback_to_heuristic():
-    config = globals().get("EFFECTIVE_CONFIG", {})
-    if isinstance(config, dict) and "ADDIT_FALLBACK_TO_HEURISTIC" in config:
-        return bool(config["ADDIT_FALLBACK_TO_HEURISTIC"])
-    return bool(globals().get("ADDIT_CONFIG", {}).get("ADDIT_FALLBACK_TO_HEURISTIC", True))
+    return bool(globals().get("ADDIT_FALLBACK_TO_HEURISTIC", ADDIT_FALLBACK_TO_HEURISTIC))
 
 
 def addit_hint_metadata(hint, placement_source=None):
