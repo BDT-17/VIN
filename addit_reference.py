@@ -23,16 +23,6 @@ from sd35_evaluation import (
 )
 
 
-ADDIT_REFERENCE_ENABLED = bool(globals().get("ADDIT_REFERENCE_ENABLED", True))
-ADDIT_NUM_CANDIDATES = int(globals().get("ADDIT_NUM_CANDIDATES", 3))
-ADDIT_MIN_PERSON_CONF = float(globals().get("ADDIT_MIN_PERSON_CONF", 0.35))
-ADDIT_MAX_EXISTING_IOU = float(globals().get("ADDIT_MAX_EXISTING_IOU", 0.25))
-ADDIT_SAVE_REFERENCES = bool(globals().get("ADDIT_SAVE_REFERENCES", True))
-ADDIT_RETRY_SEED_STEP = int(globals().get("ADDIT_RETRY_SEED_STEP", 9973))
-ADDIT_REFERENCE_DIR = Path(globals().get("ADDIT_REFERENCE_DIR", OUTPUT_DIR / "addit_references"))
-ADDIT_REFERENCE_DEBUG_DIR = Path(globals().get("ADDIT_REFERENCE_DEBUG_DIR", OUTPUT_DIR / "debug_addit_reference"))
-
-
 @dataclass
 class AddItReferenceHint:
     valid: bool = False
