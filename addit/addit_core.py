@@ -28,6 +28,24 @@ import torch.nn.functional as F
 from PIL import Image, ImageDraw, ImageFilter
 
 
+def _expand_bbox(bbox, image_size: Tuple[int, int], expansion: float):
+    """Expand a bbox around its center and clamp it to image bounds."""
+    img_w, img_h = image_size
+    x1, y1, x2, y2 = bbox
+    bw = max(1, x2 - x1)
+    bh = max(1, y2 - y1)
+    cx = x1 + bw / 2
+    cy = y1 + bh / 2
+    new_w = bw * max(1.0, float(expansion))
+    new_h = bh * max(1.0, float(expansion))
+    return (
+        int(max(0, round(cx - new_w / 2))),
+        int(max(0, round(cy - new_h / 2))),
+        int(min(img_w, round(cx + new_w / 2))),
+        int(min(img_h, round(cy + new_h / 2))),
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Shared mutable state visible to every attention processor
 # ═══════════════════════════════════════════════════════════════════════════
@@ -463,7 +481,7 @@ def create_latent_insertion_mask(
     mask_full = Image.new("L", (img_w, img_h), 0)
     draw = ImageDraw.Draw(mask_full)
 
-    x1, y1, x2, y2 = bbox
+    x1, y1, x2, y2 = _expand_bbox(bbox, image_size, expansion)
     bw = x2 - x1
     bh = y2 - y1
     cx = x1 + bw // 2
@@ -501,6 +519,71 @@ def create_latent_insertion_mask(
     return torch.from_numpy(mask_np).unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
 
 
+def create_pixel_insertion_mask(
+    bbox,
+    image_size: Tuple[int, int],
+    expansion: float = 1.15,
+    feather: int = 0,
+    mode: str = "bbox",
+) -> Image.Image:
+    """Create a pixel-space mask for final compositing.
+
+    White keeps generated pixels; black restores source pixels. With
+    ``mode="bbox"`` and ``feather=0``, every pixel outside the expanded
+    insertion bbox is copied exactly from the source image.
+    """
+    img_w, img_h = image_size
+    x1, y1, x2, y2 = _expand_bbox(bbox, image_size, expansion)
+    mask = Image.new("L", (img_w, img_h), 0)
+    draw = ImageDraw.Draw(mask)
+
+    if mode == "silhouette":
+        bw = x2 - x1
+        bh = y2 - y1
+        cx = x1 + bw // 2
+        head_r = max(4, int(bw * 0.20))
+        head_y = y1 + max(4, int(bh * 0.10))
+        shoulder_y = y1 + int(bh * 0.26)
+        hip_y = y1 + int(bh * 0.60)
+        foot_y = y2
+
+        draw.ellipse((cx - head_r, head_y, cx + head_r, head_y + 2 * head_r), fill=255)
+        draw.rounded_rectangle((cx - int(bw * 0.25), shoulder_y, cx + int(bw * 0.25), hip_y), radius=4, fill=255)
+        leg_w = max(4, int(bw * 0.12))
+        draw.line((cx - int(bw * 0.12), hip_y, cx - int(bw * 0.18), foot_y), fill=255, width=leg_w)
+        draw.line((cx + int(bw * 0.12), hip_y, cx + int(bw * 0.18), foot_y), fill=255, width=leg_w)
+        arm_w = max(3, int(bw * 0.08))
+        draw.line((cx - int(bw * 0.22), shoulder_y + 6, cx - int(bw * 0.32), hip_y - 4), fill=255, width=arm_w)
+        draw.line((cx + int(bw * 0.22), shoulder_y + 6, cx + int(bw * 0.32), hip_y - 4), fill=255, width=arm_w)
+    else:
+        draw.rectangle((x1, y1, x2, y2), fill=255)
+
+    if feather > 0:
+        mask = mask.filter(ImageFilter.GaussianBlur(radius=feather))
+    return mask
+
+
+def composite_generated_region(
+    source_image: Image.Image,
+    generated_image: Image.Image,
+    bbox,
+    expansion: float = 1.15,
+    feather: int = 0,
+    mode: str = "bbox",
+) -> Image.Image:
+    """Restore source pixels outside the generated insertion region."""
+    source = source_image.convert("RGB")
+    generated = generated_image.convert("RGB").resize(source.size, Image.LANCZOS)
+    mask = create_pixel_insertion_mask(
+        bbox=bbox,
+        image_size=source.size,
+        expansion=expansion,
+        feather=feather,
+        mode=mode,
+    )
+    return Image.composite(generated, source, mask)
+
+
 def subject_guided_blend(
     generated_latent: torch.Tensor,
     source_noised_at_t: torch.Tensor,
@@ -514,8 +597,8 @@ def subject_guided_blend(
     Outside the mask (background): replace with source-noised latent.
 
     Blending is only active when ``step_ratio < blend_end_ratio``.
-    After that, the generated latent is returned unchanged so late
-    steps can freely refine fine details.
+    Keep ``blend_end_ratio`` at 1.0 to preserve the background through
+    the final denoising step.
 
     Parameters
     ----------
@@ -534,13 +617,8 @@ def subject_guided_blend(
 
     mask = latent_mask.to(device=generated_latent.device, dtype=generated_latent.dtype)
 
-    # Soft transition: reduce blending strength as we approach blend_end
-    progress = step_ratio / max(blend_end_ratio, 1e-6)
-    blend_strength = 1.0 - progress  # 1.0 at start, 0.0 at blend_end
-    effective_mask = mask * blend_strength + (1 - blend_strength)
-
-    # mask=1 → keep generated; mask=0 → keep source
-    blended = effective_mask * generated_latent + (1 - effective_mask) * source_noised_at_t
+    # mask=1 -> keep generated; mask=0 -> keep source-noised background.
+    blended = mask * generated_latent + (1 - mask) * source_noised_at_t
     return blended
 
 

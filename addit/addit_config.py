@@ -46,6 +46,9 @@ ADDIT_BLEND_START_RATIO     = 0.0         # blending active from this step ratio
 ADDIT_BLEND_END_RATIO       = 1.0        # blending stops at this step ratio (higher preserves background longer)
 ADDIT_MASK_DILATION_LATENT  = 3           # dilate insertion mask in latent px (tighter mask)
 ADDIT_MASK_EXPANSION_RATIO  = 1.25        # expand bbox by this ratio for mask (tighter mask)
+ADDIT_FINAL_PIXEL_COMPOSITE = True        # restore original pixels outside insertion region after VAE decode
+ADDIT_FINAL_COMPOSITE_MODE  = "bbox"      # bbox = exact background outside bbox; silhouette = tighter person mask
+ADDIT_FINAL_COMPOSITE_FEATHER_PX = 0      # 0 preserves outside pixels exactly; >0 softens the boundary
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 4. Generation Defaults (can be overridden per-variant)

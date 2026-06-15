@@ -38,6 +38,9 @@ try:
         ADDIT_BLEND_START_RATIO,
         ADDIT_DEBUG_DIR,
         ADDIT_DEBUG_MAX_ITEMS,
+        ADDIT_FINAL_COMPOSITE_FEATHER_PX,
+        ADDIT_FINAL_COMPOSITE_MODE,
+        ADDIT_FINAL_PIXEL_COMPOSITE,
         ADDIT_GUIDANCE_SCALE,
         ADDIT_FALLBACK_TO_NATIVE_IMG2IMG,
         ADDIT_MASK_DILATION_LATENT,
@@ -64,6 +67,7 @@ try:
     )
     from .addit_core import (
         AddItState,
+        composite_generated_region,
         compute_attention_weights,
         create_latent_insertion_mask,
         decode_latent_to_image,
@@ -84,6 +88,9 @@ except ImportError:
         ADDIT_BLEND_START_RATIO,
         ADDIT_DEBUG_DIR,
         ADDIT_DEBUG_MAX_ITEMS,
+        ADDIT_FINAL_COMPOSITE_FEATHER_PX,
+        ADDIT_FINAL_COMPOSITE_MODE,
+        ADDIT_FINAL_PIXEL_COMPOSITE,
         ADDIT_GUIDANCE_SCALE,
         ADDIT_FALLBACK_TO_NATIVE_IMG2IMG,
         ADDIT_MASK_DILATION_LATENT,
@@ -110,6 +117,7 @@ except ImportError:
     )
     from addit_core import (
         AddItState,
+        composite_generated_region,
         compute_attention_weights,
         create_latent_insertion_mask,
         decode_latent_to_image,
@@ -408,6 +416,15 @@ class AddItCityPersonsPipeline:
 
         # ── 7. Decode ──
         result_image = decode_latent_to_image(self.vae, latent)
+        if ADDIT_FINAL_PIXEL_COMPOSITE:
+            result_image = composite_generated_region(
+                source_image=source_image,
+                generated_image=result_image,
+                bbox=insert_bbox,
+                expansion=ADDIT_MASK_EXPANSION_RATIO,
+                feather=ADDIT_FINAL_COMPOSITE_FEATHER_PX,
+                mode=ADDIT_FINAL_COMPOSITE_MODE,
+            )
         return result_image
 
     def _native_img2img_fallback(
