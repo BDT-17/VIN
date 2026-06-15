@@ -482,12 +482,13 @@ def neutralize_person_edge_halo(source_crop, person_rgb, person_mask):
         return person_rgb
     mask_l = person_mask.convert("L")
     mask_arr = np.asarray(mask_l, dtype=np.float32) / 255.0
+    hard = mask_l.point(lambda p: 255 if p >= PERSON_PASTE_HARD_THRESHOLD else 0)
+    hard_arr = np.asarray(hard, dtype=np.float32) / 255.0
     filter_size = max(3, int(EDGE_HALO_WIDTH) * 2 + 1)
-    dilated = np.asarray(mask_l.filter(ImageFilter.MaxFilter(filter_size)), dtype=np.float32) / 255.0
-    eroded = np.asarray(mask_l.filter(ImageFilter.MinFilter(filter_size)), dtype=np.float32) / 255.0
-    ring = np.clip(dilated - eroded, 0.0, 1.0)
-    soft_edge = ((mask_arr >= EDGE_HALO_MIN_ALPHA) & (mask_arr <= EDGE_HALO_MAX_ALPHA)).astype(np.float32)
-    edge_alpha = np.clip(np.maximum(ring, soft_edge) * EDGE_HALO_COLOR_MATCH_STRENGTH, 0.0, 1.0)
+    dilated = np.asarray(hard.filter(ImageFilter.MaxFilter(filter_size)), dtype=np.float32) / 255.0
+    outside_ring = np.clip(dilated - hard_arr, 0.0, 1.0)
+    soft_edge = ((mask_arr >= EDGE_HALO_MIN_ALPHA) & (hard_arr <= 0.0)).astype(np.float32)
+    edge_alpha = np.clip(np.maximum(outside_ring, soft_edge) * EDGE_HALO_COLOR_MATCH_STRENGTH, 0.0, 1.0)
     edge_active = edge_alpha > 0.02
     if not np.any(edge_active):
         return person_rgb
@@ -514,15 +515,11 @@ def tight_person_edge_alpha(person_mask):
     hard = mask_l.point(lambda p: 255 if p >= PERSON_PASTE_HARD_THRESHOLD else 0)
     filter_size = max(3, int(EDGE_HALO_WIDTH) * 2 + 1)
     dilated = np.asarray(hard.filter(ImageFilter.MaxFilter(filter_size)), dtype=np.float32) / 255.0
-    inner_filter_size = max(3, 2 * max(1, int(EDGE_HALO_WIDTH) + 1) + 1)
-    eroded = np.asarray(hard.filter(ImageFilter.MinFilter(inner_filter_size)), dtype=np.float32) / 255.0
     hard_arr = np.asarray(hard, dtype=np.float32) / 255.0
 
     outside_ring = np.clip(dilated - hard_arr, 0.0, 1.0)
-    inner_ring = np.clip(hard_arr - eroded, 0.0, 1.0)
     soft_transition = ((mask_arr >= EDGE_HALO_MIN_ALPHA) & (mask_arr < PERSON_PASTE_HARD_THRESHOLD / 255.0)).astype(np.float32)
     edge = np.maximum(outside_ring, soft_transition) * (1.0 - hard_arr)
-    edge = np.maximum(edge, inner_ring * 0.72)
     return np.clip(edge * EDGE_HALO_COLOR_MATCH_STRENGTH, 0.0, 1.0)
 
 
@@ -619,12 +616,16 @@ def match_pasted_edge_to_composite_mean(result_crop, person_mask):
 
     arr = np.asarray(result_crop.convert("RGB"), dtype=np.float32)
     blurred = np.asarray(result_crop.convert("RGB").filter(ImageFilter.GaussianBlur(radius=0.65)), dtype=np.float32)
-    local_mean = blended_background_mean_map(result_crop, person_mask)
+    horizon_mean_by_row = blended_background_mean_map(result_crop, person_mask)
     softened = arr * 0.30 + blurred * 0.70
     bg_blend = float(np.clip(EDGE_HORIZON_BG_BLEND, 0.0, 1.0))
-    mean_matched = softened * (1.0 - bg_blend) + local_mean * bg_blend
-    edge_alpha_3 = np.expand_dims(np.clip(edge_alpha, 0.0, 1.0), axis=2)
-    matched = arr * (1.0 - edge_alpha_3) + mean_matched * edge_alpha_3
+    matched = arr.copy()
+    active_alpha = np.expand_dims(np.clip(edge_alpha[edge_active], 0.0, 1.0), axis=1)
+    edge_target = (
+        softened[edge_active] * (1.0 - bg_blend)
+        + horizon_mean_by_row[edge_active] * bg_blend
+    )
+    matched[edge_active] = arr[edge_active] * (1.0 - active_alpha) + edge_target * active_alpha
     return Image.fromarray(np.clip(matched, 0, 255).astype(np.uint8), mode="RGB")
 
 
