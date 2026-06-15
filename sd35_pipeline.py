@@ -464,14 +464,14 @@ def soften_dark_person_edge(source_crop, person_rgb, person_mask):
         return person_rgb
 
     arr = np.asarray(person_rgb.convert("RGB"), dtype=np.float32)
-    blurred_person = np.asarray(person_rgb.convert("RGB").filter(ImageFilter.GaussianBlur(radius=0.55)), dtype=np.float32)
+    blurred_person = np.asarray(person_rgb.convert("RGB").filter(ImageFilter.GaussianBlur(radius=0.25)), dtype=np.float32)
     background_tone = blended_background_mean_map(source_crop, person_mask)
-    target = blurred_person * 0.72 + background_tone * 0.28
+    target = blurred_person * 0.86 + background_tone * 0.14
 
     luma = np.sum(arr * np.array([0.2126, 0.7152, 0.0722], dtype=np.float32).reshape(1, 1, 3), axis=2)
     bg_luma_map = np.sum(background_tone * np.array([0.2126, 0.7152, 0.0722], dtype=np.float32).reshape(1, 1, 3), axis=2)
     dark_edge_boost = np.clip((bg_luma_map - luma) / 95.0, 0.0, 0.35)
-    alpha = np.clip(edge * (0.22 + dark_edge_boost), 0.0, 0.42)
+    alpha = np.clip(edge * (0.12 + dark_edge_boost * 0.45), 0.0, 0.24)
     alpha_3 = np.expand_dims(alpha, axis=2)
     softened = arr * (1.0 - alpha_3) + target * alpha_3
     return Image.fromarray(np.clip(softened, 0, 255).astype(np.uint8), mode="RGB")
@@ -615,9 +615,9 @@ def match_pasted_edge_to_composite_mean(result_crop, person_mask):
         return result_crop
 
     arr = np.asarray(result_crop.convert("RGB"), dtype=np.float32)
-    blurred = np.asarray(result_crop.convert("RGB").filter(ImageFilter.GaussianBlur(radius=0.65)), dtype=np.float32)
+    blurred = np.asarray(result_crop.convert("RGB").filter(ImageFilter.GaussianBlur(radius=0.25)), dtype=np.float32)
     horizon_mean_by_row = blended_background_mean_map(result_crop, person_mask)
-    softened = arr * 0.30 + blurred * 0.70
+    softened = arr * 0.72 + blurred * 0.28
     bg_blend = float(np.clip(EDGE_HORIZON_BG_BLEND, 0.0, 1.0))
     matched = arr.copy()
     active_alpha = np.expand_dims(np.clip(edge_alpha[edge_active], 0.0, 1.0), axis=1)

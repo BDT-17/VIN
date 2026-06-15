@@ -1012,10 +1012,9 @@ def prepare_person_paste_mask(person_mask, size):
     mask = clean_binary_person_mask(mask, keep_components=ACCESSORY_KEEP_COMPONENTS)
     trim_px = max(0, int(PERSON_MASK_TRIM_FRINGE_PIXELS))
     if trim_px > 0:
-        # Remove the generated-background fringe at the silhouette boundary,
-        # then restore one soft pixel so accessories are not aggressively cut.
-        eroded = mask.filter(ImageFilter.MinFilter(trim_px * 2 + 1))
-        mask = eroded.filter(ImageFilter.MaxFilter(trim_px * 2 + 1))
+        # Cut the generated-background fringe out of the accepted mask. Do not
+        # dilate back to the original silhouette, otherwise the fringe returns.
+        mask = mask.filter(ImageFilter.MinFilter(trim_px * 2 + 1))
     if PERSON_PASTE_FEATHER_RADIUS and PERSON_PASTE_FEATHER_RADIUS > 0:
         soft = mask.filter(ImageFilter.GaussianBlur(radius=PERSON_PASTE_FEATHER_RADIUS))
         mask = ImageChops.multiply(mask, soft)
