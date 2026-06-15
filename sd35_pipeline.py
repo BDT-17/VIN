@@ -3,7 +3,6 @@
 import csv
 import gc
 import json
-import sys
 from datetime import datetime
 import math
 import numpy as np
@@ -67,25 +66,6 @@ def addit_fallback_to_heuristic():
     if isinstance(config, dict) and "ADDIT_FALLBACK_TO_HEURISTIC" in config:
         return bool(config["ADDIT_FALLBACK_TO_HEURISTIC"])
     return bool(globals().get("ADDIT_CONFIG", {}).get("ADDIT_FALLBACK_TO_HEURISTIC", True))
-
-
-def sync_addit_reference_module_flags():
-    module = sys.modules.get("addit_reference")
-    if module is None:
-        return
-    defaults = {
-        "ADDIT_REFERENCE_ENABLED": addit_reference_enabled(),
-        "ADDIT_NUM_CANDIDATES": int(globals().get("ADDIT_NUM_CANDIDATES", 3)),
-        "ADDIT_MIN_PERSON_CONF": float(globals().get("ADDIT_MIN_PERSON_CONF", 0.35)),
-        "ADDIT_MAX_EXISTING_IOU": float(globals().get("ADDIT_MAX_EXISTING_IOU", 0.25)),
-        "ADDIT_SAVE_REFERENCES": bool(globals().get("ADDIT_SAVE_REFERENCES", True)),
-        "ADDIT_RETRY_SEED_STEP": int(globals().get("ADDIT_RETRY_SEED_STEP", 9973)),
-        "ADDIT_REFERENCE_DIR": globals().get("ADDIT_REFERENCE_DIR", OUTPUT_DIR / "addit_references"),
-        "ADDIT_REFERENCE_DEBUG_DIR": globals().get("ADDIT_REFERENCE_DEBUG_DIR", OUTPUT_DIR / "debug_addit_reference"),
-    }
-    for name, value in defaults.items():
-        if not hasattr(module, name):
-            setattr(module, name, value)
 
 
 def addit_hint_metadata(hint, placement_source=None):
@@ -1255,7 +1235,6 @@ def generate_variant_with_pipe(pipe, record, variant, output_path, seed, device=
     scale_meta = default_scale_correction_metadata()
     addit_hints = []
     if addit_reference_enabled():
-        sync_addit_reference_module_flags()
         addit_hints = generate_addit_reference_hints(pipe, source, record, variant, seed, device=device)
         if not first_valid_addit_hint(addit_hints) and not addit_fallback_to_heuristic():
             first_reason = next((hint.reject_reason for hint in addit_hints if hint.reject_reason), "no_valid_addit_hint")
