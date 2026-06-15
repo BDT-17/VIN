@@ -23,7 +23,7 @@ from sd35_config import *  # noqa: F401,F403
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. Weighted Extended-Attention
 # ═══════════════════════════════════════════════════════════════════════════
-ADDIT_WEIGHTED_EXTENDED_ATTENTION = False # experimental; native attention is safer on Kaggle
+ADDIT_WEIGHTED_EXTENDED_ATTENTION = True  # Enable extended attention
 ADDIT_ATTENTION_SCHEDULE = "cosine"       # cosine | linear | constant
 ADDIT_W_SOURCE_START     = 0.70           # w_source at step 0 (noisy)
 ADDIT_W_SOURCE_END       = 0.05           # w_source at final step (clean)
@@ -43,9 +43,9 @@ ADDIT_NOISE_BLEND_RATIO   = 0.85          # blend source noise vs pure random
 # ═══════════════════════════════════════════════════════════════════════════
 ADDIT_BLEND_FEATHER_LATENT  = 3           # Gaussian blur radius for latent mask edges
 ADDIT_BLEND_START_RATIO     = 0.0         # blending active from this step ratio
-ADDIT_BLEND_END_RATIO       = 0.80        # blending stops at this step ratio
-ADDIT_MASK_DILATION_LATENT  = 2           # dilate insertion mask in latent px
-ADDIT_MASK_EXPANSION_RATIO  = 1.15        # expand bbox by this ratio for mask
+ADDIT_BLEND_END_RATIO       = 0.95        # blending stops at this step ratio (higher preserves background longer)
+ADDIT_MASK_DILATION_LATENT  = 1           # dilate insertion mask in latent px (tighter mask)
+ADDIT_MASK_EXPANSION_RATIO  = 1.02        # expand bbox by this ratio for mask (tighter mask)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 4. Generation Defaults (can be overridden per-variant)
