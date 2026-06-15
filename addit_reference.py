@@ -31,13 +31,6 @@ ADDIT_RETRY_SEED_STEP = int(globals().get("ADDIT_RETRY_SEED_STEP", 9973))
 ADDIT_REFERENCE_DIR = Path(globals().get("ADDIT_REFERENCE_DIR", OUTPUT_DIR / "addit_references"))
 ADDIT_REFERENCE_DEBUG_DIR = Path(globals().get("ADDIT_REFERENCE_DEBUG_DIR", OUTPUT_DIR / "debug_addit_reference"))
 globals().setdefault("ADDIT_REFERENCE_ENABLED", True)
-globals().setdefault("ADDIT_NUM_CANDIDATES", 3)
-globals().setdefault("ADDIT_MIN_PERSON_CONF", 0.35)
-globals().setdefault("ADDIT_MAX_EXISTING_IOU", 0.25)
-globals().setdefault("ADDIT_SAVE_REFERENCES", True)
-globals().setdefault("ADDIT_RETRY_SEED_STEP", 9973)
-globals().setdefault("ADDIT_REFERENCE_DIR", OUTPUT_DIR / "addit_references")
-globals().setdefault("ADDIT_REFERENCE_DEBUG_DIR", OUTPUT_DIR / "debug_addit_reference")
 
 
 def addit_ref_value(name, default):
