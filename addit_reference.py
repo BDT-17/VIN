@@ -30,6 +30,7 @@ ADDIT_SAVE_REFERENCES = bool(globals().get("ADDIT_SAVE_REFERENCES", True))
 ADDIT_RETRY_SEED_STEP = int(globals().get("ADDIT_RETRY_SEED_STEP", 9973))
 ADDIT_REFERENCE_DIR = Path(globals().get("ADDIT_REFERENCE_DIR", OUTPUT_DIR / "addit_references"))
 ADDIT_REFERENCE_DEBUG_DIR = Path(globals().get("ADDIT_REFERENCE_DEBUG_DIR", OUTPUT_DIR / "debug_addit_reference"))
+globals().setdefault("ADDIT_REFERENCE_ENABLED", True)
 
 
 def addit_reference_flag_enabled():
