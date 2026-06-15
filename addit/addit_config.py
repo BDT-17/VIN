@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 
 # ---------------------------------------------------------------------------
-# Make the parent ``notebooks/`` directory importable so we can reuse
+# Make the repository root importable so we can reuse
 # sd35_config, sd35_data, sd35_utils, sd35_evaluation, sd35_model.
 # ---------------------------------------------------------------------------
 _PARENT_DIR = str(Path(__file__).resolve().parent.parent)
