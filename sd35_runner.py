@@ -63,9 +63,6 @@ def write_manifest(rows, output_dir=OUTPUT_DIR):
         "foreground_occlusion_overlap_ratio", "foreground_occlusion_removed_ratio",
         "person_score", "scale_score", "background_score", "edge_score", "quality_score",
         "retry_attempts", "last_reject_reason", "reject_reason",
-        "placement_source", "addit_candidate_id", "addit_person_conf", "addit_bbox",
-        "addit_existing_iou", "addit_valid", "addit_reject_reason",
-        "addit_reference_path", "addit_final_debug_path",
         "seed", "source_path", "label_path", "output_path",
     ]
     with manifest_path.open("w", encoding="utf-8", newline="") as handle:
@@ -199,15 +196,6 @@ def run_augmentation_jobs_on_device(device, jobs, total_jobs, backend):
             "retry_attempts": generation_config.get("retry_attempts", 0),
             "last_reject_reason": generation_config.get("last_reject_reason", ""),
             "reject_reason": generation_config.get("reject_reason", generation_config.get("last_reject_reason", "")),
-            "placement_source": generation_config.get("placement_source", "heuristic"),
-            "addit_candidate_id": generation_config.get("addit_candidate_id", ""),
-            "addit_person_conf": generation_config.get("addit_person_conf", ""),
-            "addit_bbox": generation_config.get("addit_bbox", ""),
-            "addit_existing_iou": generation_config.get("addit_existing_iou", ""),
-            "addit_valid": generation_config.get("addit_valid", False),
-            "addit_reject_reason": generation_config.get("addit_reject_reason", ""),
-            "addit_reference_path": generation_config.get("addit_reference_path", ""),
-            "addit_final_debug_path": generation_config.get("addit_final_debug_path", ""),
             "seed": job["seed"],
             "source_path": str(record.path),
             "label_path": str(record.label_path) if record.label_path else "",
@@ -253,8 +241,6 @@ def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKE
     scale_corrected_count = sum(1 for row in manifest_rows if str(row.get("scale_corrected")).lower() == "true")
     seamless_clone_used_count = sum(1 for row in manifest_rows if str(row.get("seamless_clone_used")).lower() == "true")
     fallback_alpha_paste_count = sum(1 for row in manifest_rows if str(row.get("fallback_alpha_paste")).lower() == "true")
-    addit_reference_count = sum(1 for row in manifest_rows if row.get("placement_source") == "addit_reference")
-    addit_fallback_count = sum(1 for row in manifest_rows if row.get("placement_source") != "addit_reference")
     print(f"Generated {len(all_outputs)} images in {OUTPUT_DIR}")
     print("Smoke/evaluation counters:")
     print(f"  total attempts: {total_jobs}")
@@ -264,8 +250,6 @@ def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKE
     print(f"  scale_corrected_count: {scale_corrected_count}")
     print(f"  seamless_clone_used_count: {seamless_clone_used_count}")
     print(f"  fallback_alpha_paste_count: {fallback_alpha_paste_count}")
-    print(f"  addit_reference_used: {addit_reference_count}")
-    print(f"  fallback_heuristic_used: {addit_fallback_count}")
     print(f"  reject reasons histogram: {reject_histogram}")
     if total_jobs:
         estimated_before_scale_correction_accepts = max(0, accepted - scale_corrected_count)
@@ -283,8 +267,6 @@ def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKE
         "rejected": rejected,
         "accept_rate": accepted / total_jobs if total_jobs else 0.0,
         "reject_histogram": reject_histogram,
-        "addit_reference_used": addit_reference_count,
-        "fallback_heuristic_used": addit_fallback_count,
     }
     if return_manifest_rows:
         return all_outputs, manifest_rows
@@ -573,7 +555,6 @@ def reset_runtime_config():
 # Run this cell, then call reset_runtime_config() whenever you want to undo runtime autotune changes.
 
 def run_smoke(records, smoke_images=10, smoke_splits=None):
-    start_time = time.time()
     smoke_splits = smoke_splits or ["train"]
     generated_paths, manifest_rows = augment_dataset(
         records,
@@ -582,76 +563,8 @@ def run_smoke(records, smoke_images=10, smoke_splits=None):
         target_splits=smoke_splits,
         return_manifest_rows=True,
     )
-    elapsed = time.time() - start_time
-    if manifest_rows:
-        print(f"Average time per accepted image: {elapsed / max(1, len(manifest_rows)):.1f}s")
     autotune_report = autotune_from_last_run(apply=True, dry_run=True)
     return generated_paths, manifest_rows, autotune_report
-
-
-def save_addit_reference_debug_grid(rows=None, max_items=10, output_dir=OUTPUT_DIR):
-    rows = globals().get("LAST_MANIFEST_ROWS", []) if rows is None else rows
-    paths = [
-        Path(row.get("addit_final_debug_path", ""))
-        for row in (rows or [])
-        if row.get("addit_final_debug_path") and Path(row.get("addit_final_debug_path")).exists()
-    ][:max_items]
-    if not paths:
-        return ""
-    thumbs = []
-    for path in paths:
-        image = Image.open(path).convert("RGB")
-        image.thumbnail((768, 256))
-        thumbs.append(image.copy())
-    cols = 1
-    rows_count = len(thumbs)
-    width = max(image.width for image in thumbs)
-    height = max(image.height for image in thumbs)
-    grid = Image.new("RGB", (width * cols, height * rows_count), "white")
-    for index, image in enumerate(thumbs):
-        grid.paste(image, (0, index * height))
-    out_path = Path(output_dir) / "debug_addit_reference" / "addit_reference_debug_grid.png"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    grid.save(out_path)
-    print("Saved Add-it reference debug grid:", out_path)
-    return str(out_path)
-
-
-def summarize_addit_reference_smoke(rows=None, reject_histogram=None, elapsed_seconds=None):
-    rows = globals().get("LAST_MANIFEST_ROWS", []) if rows is None else rows
-    reject_histogram = globals().get("LAST_REJECT_HISTOGRAM", {}) if reject_histogram is None else reject_histogram
-    rows = rows or []
-    addit_rows = [row for row in rows if row.get("placement_source") == "addit_reference"]
-    heuristic_rows = [row for row in rows if row.get("placement_source") != "addit_reference"]
-    summary = {
-        "addit_reference_used": len(addit_rows),
-        "fallback_heuristic_used": len(heuristic_rows),
-        "addit_reference_accept_rate": len(addit_rows) / max(1, len(addit_rows) + len(heuristic_rows)),
-        "reject_reason_histogram": reject_histogram or {},
-        "avg_time_per_image_seconds": round(elapsed_seconds / max(1, len(rows)), 2) if elapsed_seconds is not None else "",
-        "manifest_path": str(Path(OUTPUT_DIR) / "manifest.csv"),
-    }
-    print("=== ADD-IT REFERENCE SMOKE SUMMARY ===")
-    for key, value in summary.items():
-        print(f"{key}: {value}")
-    return summary
-
-
-def run_addit_reference_smoke(records, smoke_images=10, smoke_splits=None):
-    start_time = time.time()
-    generated_paths, manifest_rows, autotune_report = run_smoke(
-        records,
-        smoke_images=smoke_images,
-        smoke_splits=smoke_splits or ["train"],
-    )
-    elapsed = time.time() - start_time
-    summary = summarize_addit_reference_smoke(
-        manifest_rows,
-        LAST_REJECT_HISTOGRAM,
-        elapsed_seconds=elapsed,
-    )
-    debug_grid_path = save_addit_reference_debug_grid(manifest_rows, max_items=smoke_images)
-    return generated_paths, manifest_rows, autotune_report, summary, debug_grid_path
 
 
 def export_outputs():

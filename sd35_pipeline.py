@@ -31,62 +31,6 @@ from sd35_config import *
 from sd35_data import build_generation_prompt, build_variant_negative_prompt
 from sd35_utils import *
 from sd35_evaluation import *
-from addit_reference import (
-    addit_reference_meta_from_hint,
-    empty_addit_reference_fields,
-    first_valid_addit_hint,
-    generate_addit_reference_hints,
-    save_addit_final_debug,
-)
-
-
-ADDIT_FINAL_RETRY_REASONS = set(ADDIT_REFERENCE_RETRY_REASONS)
-
-
-def addit_hint_metadata(hint, placement_source=None):
-    meta = addit_reference_meta_from_hint(hint)
-    if placement_source is not None:
-        meta["placement_source"] = placement_source
-    return meta
-
-
-def heuristic_placement_metadata(reason=""):
-    meta = empty_addit_reference_fields(reason)
-    meta["placement_source"] = "heuristic"
-    return meta
-
-
-def select_insert_bbox_with_addit_hint(record, source, variant, rng, device=TRAIN_DEVICE, depth_map=None, hints=None, hint_index=0):
-    hint = None
-    if ADDIT_REFERENCE_ENABLED and hints:
-        valid_hints = [candidate for candidate in hints if candidate.valid and candidate.insert_bbox is not None]
-        if hint_index < len(valid_hints):
-            hint = valid_hints[hint_index]
-    if hint is not None:
-        insert_bbox = tuple(int(round(v)) for v in hint.insert_bbox)
-        insert_h = insert_bbox[3] - insert_bbox[1]
-        insert_w = insert_bbox[2] - insert_bbox[0]
-        return insert_bbox, {
-            "expected_person_height": insert_h,
-            "expected_person_width": insert_w,
-            "insert_width": insert_w,
-            "insert_height": insert_h,
-            "ground_y": insert_bbox[3],
-            "scale_hint": hint.estimated_scale if hint.estimated_scale is not None else "",
-            **addit_hint_metadata(hint, placement_source="addit_reference"),
-        }, hint
-
-    insert_bbox, insert_meta = find_insertion_region(
-        record, source, variant, rng, device=device, return_metadata=True, depth_map=depth_map,
-    )
-    if insert_meta is None:
-        insert_meta = {}
-    insert_meta.update(heuristic_placement_metadata("no_valid_addit_hint" if ADDIT_REFERENCE_ENABLED else "disabled"))
-    return insert_bbox, insert_meta, None
-
-
-def should_try_next_addit_hint(reason):
-    return normalize_reject_reason(reason) in ADDIT_FINAL_RETRY_REASONS
 
 def add_contact_shadow(image, insert_bbox, variant):
     if not CONTACT_SHADOW_ENABLED:
@@ -903,7 +847,7 @@ def paste_crop_person_to_original(source, generated_crop, person_mask_crop, crop
     return result, person_mask, blend_meta
 
 
-def generate_context_person_composite_with_pipe(pipe, source, record, variant, prompt, negative_prompt, seed, device, strength, guidance_scale, num_inference_steps, debug_index=None, addit_hints=None):
+def generate_context_person_composite_with_pipe(pipe, source, record, variant, prompt, negative_prompt, seed, device, strength, guidance_scale, num_inference_steps, debug_index=None):
     crop_bbox = (0, 0, source.size[0], source.size[1])
     crop_source = source.resize((RESOLUTION, RESOLUTION), Image.LANCZOS)
     original = load_source_image(record.path)
@@ -911,22 +855,14 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
     existing_vehicle_bboxes = load_vehicle_bboxes_for_crop(record, original.size, resolution=source.size[0])
     semantic_masks = semantic_placement_masks(source, record, device=device)
     depth_map = estimate_depth_map(source, device="cpu")
-    rng = random.Random(seed)
-    target_bbox, target_meta, active_addit_hint = select_insert_bbox_with_addit_hint(
-        record, source, variant, rng, device=device, depth_map=depth_map, hints=addit_hints, hint_index=0,
-    )
-    if target_bbox is None:
-        raise RuntimeError(f"Could not find insertion region for {record.path.name}")
-    generation_source = draw_person_guide_on_patch(crop_source, crop_bbox, target_bbox, variant)
-    mask_image = human_mask_for_bbox(crop_source.size, target_bbox, variant)
+    generation_source = crop_source
+    mask_image = Image.new("L", crop_source.size, 0)
     generator_device = device if str(device).startswith("cuda") else "cpu"
     max_retries = variant_retry_budget(variant)
     last_reject_reason = None
     last_reject_meta = default_scale_correction_metadata()
     scale_unrecoverable_streak = 0
     attempt_history = []
-    valid_addit_hints = [hint for hint in (addit_hints or []) if hint.valid and hint.insert_bbox is not None]
-    active_hint_index = 0 if active_addit_hint is not None else -1
 
     for attempt in range(max_retries + 1):
         attempt_seed = seed + attempt * 9973
@@ -971,26 +907,9 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
             scale_meta["scale_unrecoverable_streak"] = scale_unrecoverable_streak
             scale_meta["reject_reason"] = reject_reason
             scale_meta["last_reject_reason"] = reject_reason
-            scale_meta.update(target_meta)
             attempt_history.append(scale_meta)
             last_reject_reason = reject_reason
             last_reject_meta = scale_meta
-            if active_hint_index >= 0 and should_try_next_addit_hint(reject_reason) and active_hint_index + 1 < len(valid_addit_hints):
-                active_hint_index += 1
-                active_addit_hint = valid_addit_hints[active_hint_index]
-                target_bbox = tuple(int(round(v)) for v in active_addit_hint.insert_bbox)
-                target_meta = {
-                    "expected_person_height": target_bbox[3] - target_bbox[1],
-                    "expected_person_width": target_bbox[2] - target_bbox[0],
-                    "insert_width": target_bbox[2] - target_bbox[0],
-                    "insert_height": target_bbox[3] - target_bbox[1],
-                    "ground_y": target_bbox[3],
-                    **addit_hint_metadata(active_addit_hint, placement_source="addit_reference"),
-                }
-                generation_source = draw_person_guide_on_patch(crop_source, crop_bbox, target_bbox, variant)
-                mask_image = human_mask_for_bbox(crop_source.size, target_bbox, variant)
-                print(f"Switching to Add-it reference candidate {active_addit_hint.candidate_id} after {reject_reason}.")
-                continue
             if should_retry(reject_reason, attempt, max_retries, scale_meta):
                 print(
                     f"Rejected generated person ({reject_reason}) on attempt {attempt + 1}; "
@@ -1009,7 +928,6 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
                 "last_reject_reason": reject_reason,
                 "mask_outside_bbox_ratio": round(outside_ratio, 4),
                 "scale_unrecoverable_streak": scale_unrecoverable_streak,
-                **target_meta,
             })
             attempt_history.append(scale_meta)
             last_reject_reason = reject_reason
@@ -1036,7 +954,6 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
             "ground_y": insert_bbox[3],
             "img2img_first": True,
             "retry_attempts": attempt,
-            **target_meta,
             **occlusion_meta,
             **scale_meta,
         }
@@ -1052,7 +969,6 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
         )
         final_meta["attempt"] = attempt
         final_meta["scale_unrecoverable_streak"] = scale_unrecoverable_streak
-        final_meta.update(target_meta)
         attempt_history.append(final_meta)
 
         if is_valid:
@@ -1080,22 +996,6 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
         final_reason = normalize_reject_reason(final_reason)
         last_reject_reason = final_reason
         last_reject_meta = final_meta
-        if active_hint_index >= 0 and should_try_next_addit_hint(final_reason) and active_hint_index + 1 < len(valid_addit_hints):
-            active_hint_index += 1
-            active_addit_hint = valid_addit_hints[active_hint_index]
-            target_bbox = tuple(int(round(v)) for v in active_addit_hint.insert_bbox)
-            target_meta = {
-                "expected_person_height": target_bbox[3] - target_bbox[1],
-                "expected_person_width": target_bbox[2] - target_bbox[0],
-                "insert_width": target_bbox[2] - target_bbox[0],
-                "insert_height": target_bbox[3] - target_bbox[1],
-                "ground_y": target_bbox[3],
-                **addit_hint_metadata(active_addit_hint, placement_source="addit_reference"),
-            }
-            generation_source = draw_person_guide_on_patch(crop_source, crop_bbox, target_bbox, variant)
-            mask_image = human_mask_for_bbox(crop_source.size, target_bbox, variant)
-            print(f"Switching to Add-it reference candidate {active_addit_hint.candidate_id} after final reject {final_reason}.")
-            continue
         if should_retry(final_reason, attempt, max_retries, final_meta):
             print(f"Retry attempt {attempt + 1} because final validation failed: {final_reason}")
             continue
@@ -1114,19 +1014,16 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
         )
         fallback_meta = dict(last_reject_meta or default_scale_correction_metadata())
         fallback_meta["attempt_history"] = json.dumps(attempt_history)
-        fallback_meta.update(target_meta)
         return result, insert_bbox if "insert_bbox" in locals() else None, crop_bbox, debug_path, fallback_meta
 
     final_reason = normalize_reject_reason(last_reject_reason or "bad_composite_quality")
     raise RuntimeError(f"No accepted generated person after adaptive retries (last_reason={final_reason}).")
 
 
-def generate_human_mask_inpaint_with_pipe(pipe, source, record, variant, prompt, negative_prompt, seed, device, strength, guidance_scale, num_inference_steps, debug_index=None, addit_hints=None):
+def generate_human_mask_inpaint_with_pipe(pipe, source, record, variant, prompt, negative_prompt, seed, device, strength, guidance_scale, num_inference_steps, debug_index=None):
     depth_map = estimate_depth_map(source, device="cpu")
     rng = random.Random(seed)
-    insert_bbox, insert_meta, _active_addit_hint = select_insert_bbox_with_addit_hint(
-        record, source, variant, rng, device=device, depth_map=depth_map, hints=addit_hints, hint_index=0,
-    )
+    insert_bbox, insert_meta = find_insertion_region(record, source, variant, rng, device=device, return_metadata=True, depth_map=depth_map)
     if insert_bbox is None:
         raise RuntimeError(f"Could not find insertion region for {record.path.name}")
     if BACKGROUND_PRESERVATION_MODE == "bbox_inpaint":
@@ -1154,15 +1051,13 @@ def generate_human_mask_inpaint_with_pipe(pipe, source, record, variant, prompt,
         record, variant, seed, source, mask_image, inpaint_source, generated, result,
         insert_bbox, debug_index=debug_index,
     )
-    return result, insert_bbox, patch_bbox, debug_path, insert_meta or {}
+    return result, insert_bbox, patch_bbox, debug_path
 
 
-def generate_patch_blend_with_pipe(pipe, source, record, variant, prompt, negative_prompt, seed, device, strength, guidance_scale, num_inference_steps, debug_index=None, addit_hints=None):
+def generate_patch_blend_with_pipe(pipe, source, record, variant, prompt, negative_prompt, seed, device, strength, guidance_scale, num_inference_steps, debug_index=None):
     depth_map = estimate_depth_map(source, device="cpu")
     rng = random.Random(seed)
-    insert_bbox, insert_meta, _active_addit_hint = select_insert_bbox_with_addit_hint(
-        record, source, variant, rng, device=device, depth_map=depth_map, hints=addit_hints, hint_index=0,
-    )
+    insert_bbox, insert_meta = find_insertion_region(record, source, variant, rng, device=device, return_metadata=True, depth_map=depth_map)
     if insert_bbox is None:
         raise RuntimeError(f"Could not find insertion region for {record.path.name}")
     patch_bbox = expand_bbox_with_context(insert_bbox, resolution=source.width)
@@ -1190,7 +1085,7 @@ def generate_patch_blend_with_pipe(pipe, source, record, variant, prompt, negati
         record, variant, seed, source_patch, guided_patch, aug_patch, final_patch,
         patch_bbox, insert_bbox, debug_index=debug_index,
     )
-    return result, insert_bbox, patch_bbox, debug_path, insert_meta or {}
+    return result, insert_bbox, patch_bbox, debug_path
 
 
 def generate_variant_with_pipe(pipe, record, variant, output_path, seed, device=TRAIN_DEVICE, strength=None, debug_index=None):
@@ -1208,29 +1103,21 @@ def generate_variant_with_pipe(pipe, record, variant, output_path, seed, device=
         print(f"Generation config: variant={variant}, mode={BACKGROUND_PRESERVATION_MODE}, strength={strength}, guidance_scale={guidance_scale}, steps={num_inference_steps}, resolution={RESOLUTION}")
     clear_cuda()
     scale_meta = default_scale_correction_metadata()
-    addit_hints = []
-    if ADDIT_REFERENCE_ENABLED:
-        addit_hints = generate_addit_reference_hints(pipe, source, record, variant, seed, device=device)
-        if not first_valid_addit_hint(addit_hints) and not ADDIT_FALLBACK_TO_HEURISTIC:
-            first_reason = next((hint.reject_reason for hint in addit_hints if hint.reject_reason), "no_valid_addit_hint")
-            raise RuntimeError(f"Add-it reference hint failed and heuristic fallback is disabled ({first_reason}).")
     if BACKGROUND_PRESERVATION_MODE == "context_person_composite":
         image, insert_bbox, patch_bbox, debug_path, scale_meta = generate_context_person_composite_with_pipe(
             pipe, source, record, variant, prompt, negative_prompt, seed, device,
-            strength, guidance_scale, num_inference_steps, debug_index=debug_index, addit_hints=addit_hints,
+            strength, guidance_scale, num_inference_steps, debug_index=debug_index,
         )
     elif BACKGROUND_PRESERVATION_MODE in {"human_mask_inpaint", "bbox_inpaint"}:
-        image, insert_bbox, patch_bbox, debug_path, placement_meta = generate_human_mask_inpaint_with_pipe(
+        image, insert_bbox, patch_bbox, debug_path = generate_human_mask_inpaint_with_pipe(
             pipe, source, record, variant, prompt, negative_prompt, seed, device,
-            strength, guidance_scale, num_inference_steps, debug_index=debug_index, addit_hints=addit_hints,
+            strength, guidance_scale, num_inference_steps, debug_index=debug_index,
         )
-        scale_meta.update(placement_meta)
     elif BACKGROUND_PRESERVATION_MODE == "patch_blend":
-        image, insert_bbox, patch_bbox, debug_path, placement_meta = generate_patch_blend_with_pipe(
+        image, insert_bbox, patch_bbox, debug_path = generate_patch_blend_with_pipe(
             pipe, source, record, variant, prompt, negative_prompt, seed, device,
-            strength, guidance_scale, num_inference_steps, debug_index=debug_index, addit_hints=addit_hints,
+            strength, guidance_scale, num_inference_steps, debug_index=debug_index,
         )
-        scale_meta.update(placement_meta)
     else:
         generator_device = device if str(device).startswith("cuda") else "cpu"
         generator = torch.Generator(device=generator_device).manual_seed(seed)
@@ -1247,7 +1134,6 @@ def generate_variant_with_pipe(pipe, record, variant, output_path, seed, device=
         patch_bbox = None
         debug_path = ""
     image.save(output_path)
-    addit_final_debug_path = save_addit_final_debug(record, image, insert_bbox, scale_meta, seed, variant)
     clear_cuda()
     return output_path, {
         "strength": strength,
@@ -1257,7 +1143,6 @@ def generate_variant_with_pipe(pipe, record, variant, output_path, seed, device=
         "insert_bbox": insert_bbox,
         "patch_bbox": patch_bbox,
         "patch_debug_path": debug_path,
-        "addit_final_debug_path": addit_final_debug_path,
         "expected_new_person_count": expected_new_person_count(variant),
         "detected_new_person_count": expected_new_person_count(variant) if insert_bbox is not None else 0,
         **scale_meta,
