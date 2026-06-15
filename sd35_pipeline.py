@@ -40,7 +40,20 @@ from addit_reference import (
 )
 
 
-ADDIT_FINAL_RETRY_REASONS = set(ADDIT_REFERENCE_RETRY_REASONS)
+ADDIT_REFERENCE_ENABLED = bool(globals().get("ADDIT_REFERENCE_ENABLED", True))
+ADDIT_FALLBACK_TO_HEURISTIC = bool(globals().get("ADDIT_FALLBACK_TO_HEURISTIC", True))
+ADDIT_FINAL_RETRY_REASONS = set(globals().get("ADDIT_REFERENCE_RETRY_REASONS", {
+    "wrong_scale",
+    "cropped_person",
+    "ghost_person",
+    "floating_person",
+    "final_scale_mismatch",
+    "partial_or_cropped",
+    "partial_or_cropped_body",
+    "ghost_person_low_contrast",
+    "too_small_or_ghost_person",
+    "floating_or_bad_ground",
+}))
 
 
 def addit_hint_metadata(hint, placement_source=None):
