@@ -352,6 +352,25 @@ ADDIT_CONFIG = {
  'ADDIT_BLEND_SHADOW_EXTENSION': 0.22,
  'ADDIT_BLEND_SHADOW_BLUR': 5.0,
  'ADDIT_BLEND_SHADOW_ALPHA': 0.24,
+ 'ADDIT_REFERENCE_ENABLED': True,
+ 'ADDIT_NUM_CANDIDATES': 3,
+ 'ADDIT_RETRY_SEED_STEP': 9973,
+ 'ADDIT_MIN_PERSON_CONF': 0.35,
+ 'ADDIT_MAX_EXISTING_IOU': 0.25,
+ 'ADDIT_SAVE_REFERENCES': True,
+ 'ADDIT_FALLBACK_TO_HEURISTIC': True,
+ 'ADDIT_REFERENCE_RETRY_REASONS': {
+     'wrong_scale',
+     'cropped_person',
+     'ghost_person',
+     'floating_person',
+     'final_scale_mismatch',
+     'partial_or_cropped',
+     'partial_or_cropped_body',
+     'ghost_person_low_contrast',
+     'too_small_or_ghost_person',
+     'floating_or_bad_ground',
+ },
 }
 
 CONFIG_GROUPS = [
@@ -424,6 +443,8 @@ METRICS_CSV_PATH = METRICS_DIR / "augmentation_metrics.csv"
 METRICS_SUMMARY_PATH = METRICS_DIR / "augmentation_metrics_summary.csv"
 METRICS_PLOT_PATH = METRICS_DIR / "augmentation_metrics_by_variant.png"
 PATCH_DEBUG_DIR = OUTPUT_DIR / "patch_debug"
+ADDIT_REFERENCE_DIR = OUTPUT_DIR / "addit_references"
+ADDIT_REFERENCE_DEBUG_DIR = OUTPUT_DIR / "debug_addit_reference"
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 BASE_CAPTION = "urban street photo"
@@ -449,8 +470,12 @@ def ensure_output_dirs():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     METRICS_DIR.mkdir(parents=True, exist_ok=True)
     PATCH_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+    ADDIT_REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
+    ADDIT_REFERENCE_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
     return {
         "output_dir": OUTPUT_DIR,
         "metrics_dir": METRICS_DIR,
         "patch_debug_dir": PATCH_DEBUG_DIR,
+        "addit_reference_dir": ADDIT_REFERENCE_DIR,
+        "addit_reference_debug_dir": ADDIT_REFERENCE_DEBUG_DIR,
     }
