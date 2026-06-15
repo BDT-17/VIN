@@ -41,11 +41,11 @@ ADDIT_NOISE_BLEND_RATIO   = 0.85          # blend source noise vs pure random
 # ═══════════════════════════════════════════════════════════════════════════
 # 3. Subject-Guided Latent Blending
 # ═══════════════════════════════════════════════════════════════════════════
-ADDIT_BLEND_FEATHER_LATENT  = 3           # Gaussian blur radius for latent mask edges
+ADDIT_BLEND_FEATHER_LATENT  = 5           # Gaussian blur radius for latent mask edges
 ADDIT_BLEND_START_RATIO     = 0.0         # blending active from this step ratio
-ADDIT_BLEND_END_RATIO       = 0.95        # blending stops at this step ratio (higher preserves background longer)
-ADDIT_MASK_DILATION_LATENT  = 1           # dilate insertion mask in latent px (tighter mask)
-ADDIT_MASK_EXPANSION_RATIO  = 1.02        # expand bbox by this ratio for mask (tighter mask)
+ADDIT_BLEND_END_RATIO       = 1.0        # blending stops at this step ratio (higher preserves background longer)
+ADDIT_MASK_DILATION_LATENT  = 3           # dilate insertion mask in latent px (tighter mask)
+ADDIT_MASK_EXPANSION_RATIO  = 1.25        # expand bbox by this ratio for mask (tighter mask)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 4. Generation Defaults (can be overridden per-variant)

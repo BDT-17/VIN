@@ -441,10 +441,7 @@ def create_latent_insertion_mask(
     dilation: int = 2,
     expansion: float = 1.15,
 ) -> torch.Tensor:
-    """Create a soft mask in latent space for the insertion region.
-
-    The mask is 1.0 inside the insertion area and 0.0 outside, with
-    feathered (blurred) edges.
+    """Create a soft mask in latent space representing a person silhouette.
 
     Parameters
     ----------
@@ -462,23 +459,40 @@ def create_latent_insertion_mask(
     img_w, img_h = image_size
     lat_w, lat_h = latent_size
 
+    # Draw person silhouette at full resolution
+    mask_full = Image.new("L", (img_w, img_h), 0)
+    draw = ImageDraw.Draw(mask_full)
+
     x1, y1, x2, y2 = bbox
-    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-    bw, bh = (x2 - x1) * expansion, (y2 - y1) * expansion
+    bw = x2 - x1
+    bh = y2 - y1
+    cx = x1 + bw // 2
 
-    # Convert to latent coordinates
-    scale_x = lat_w / img_w
-    scale_y = lat_h / img_h
-    lx1 = max(0, int((cx - bw / 2) * scale_x) - dilation)
-    ly1 = max(0, int((cy - bh / 2) * scale_y) - dilation)
-    lx2 = min(lat_w, int((cx + bw / 2) * scale_x) + dilation)
-    ly2 = min(lat_h, int((cy + bh / 2) * scale_y) + dilation)
+    # Define person shape proportions
+    head_r = max(4, int(bw * 0.20))
+    head_y = y1 + max(4, int(bh * 0.10))
+    shoulder_y = y1 + int(bh * 0.26)
+    hip_y = y1 + int(bh * 0.60)
+    foot_y = y2
 
-    # Build binary mask as PIL image for easy blurring
-    mask_pil = Image.new("L", (lat_w, lat_h), 0)
-    draw = ImageDraw.Draw(mask_pil)
-    if lx2 > lx1 and ly2 > ly1:
-        draw.rectangle((lx1, ly1, lx2 - 1, ly2 - 1), fill=255)
+    # Draw Head
+    draw.ellipse((cx - head_r, head_y, cx + head_r, head_y + 2 * head_r), fill=255)
+    # Draw Torso
+    draw.rounded_rectangle((cx - int(bw * 0.25), shoulder_y, cx + int(bw * 0.25), hip_y), radius=4, fill=255)
+    # Draw Legs
+    leg_w = max(4, int(bw * 0.12))
+    draw.line((cx - int(bw * 0.12), hip_y, cx - int(bw * 0.18), foot_y), fill=255, width=leg_w)
+    draw.line((cx + int(bw * 0.12), hip_y, cx + int(bw * 0.18), foot_y), fill=255, width=leg_w)
+    # Draw Arms
+    arm_w = max(3, int(bw * 0.08))
+    draw.line((cx - int(bw * 0.22), shoulder_y + 6, cx - int(bw * 0.32), hip_y - 4), fill=255, width=arm_w)
+    draw.line((cx + int(bw * 0.22), shoulder_y + 6, cx + int(bw * 0.32), hip_y - 4), fill=255, width=arm_w)
+
+    # Resize to latent space
+    mask_pil = mask_full.resize((lat_w, lat_h), Image.Resampling.BILINEAR)
+
+    if dilation > 0:
+        mask_pil = mask_pil.filter(ImageFilter.MaxFilter(size=1 + 2 * dilation))
 
     if feather > 0:
         mask_pil = mask_pil.filter(ImageFilter.GaussianBlur(radius=feather))

@@ -311,8 +311,6 @@ class AddItCityPersonsPipeline:
         if len(timesteps) == 0:
             return decode_latent_to_image(self.vae, source_latent)
 
-        initial_latent = latent_mask * initial_latent + (1.0 - latent_mask) * source_latent
-
         # ── 4. Encode prompts ──
         source_embeds = self._encode_prompt(ADDIT_SOURCE_PROMPT, negative_prompt, device)
         target_embeds = self._encode_prompt(target_prompt, negative_prompt, device)
@@ -392,7 +390,7 @@ class AddItCityPersonsPipeline:
                 if step_ratio >= ADDIT_BLEND_START_RATIO:
                     latent = subject_guided_blend(
                         generated_latent=latent,
-                        source_noised_at_t=source_latent,
+                        source_noised_at_t=source_noised_t,
                         latent_mask=latent_mask,
                         step_ratio=step_ratio,
                         blend_end_ratio=ADDIT_BLEND_END_RATIO,
