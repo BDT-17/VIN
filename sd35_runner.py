@@ -232,17 +232,34 @@ def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKE
     total_jobs = len(jobs)
     print(f"Using augmentation devices: {devices}")
     shards = [jobs[index::len(devices)] for index in range(len(devices))]
+    active_shards = [(device, shard) for device, shard in zip(devices, shards) if shard]
     all_outputs = []
     manifest_rows = []
     reject_histogram = {}
-    for device, shard in zip(devices, shards):
-        if not shard:
-            continue
-        outputs, rows, device_rejects = run_augmentation_jobs_on_device(device, shard, total_jobs, backend)
+
+    def merge_device_results(outputs, rows, device_rejects):
         all_outputs.extend(outputs)
         manifest_rows.extend(rows)
         for reason, count in device_rejects.items():
             reject_histogram[reason] = reject_histogram.get(reason, 0) + count
+
+    if len(active_shards) > 1:
+        print(f"Running augmentation in parallel on {len(active_shards)} devices.")
+        with ThreadPoolExecutor(max_workers=len(active_shards)) as executor:
+            futures = {
+                executor.submit(run_augmentation_jobs_on_device, device, shard, total_jobs, backend): device
+                for device, shard in active_shards
+            }
+            for future in as_completed(futures):
+                device = futures[future]
+                outputs, rows, device_rejects = future.result()
+                merge_device_results(outputs, rows, device_rejects)
+                print(f"[{device}] shard complete: accepted={len(outputs)}, rejected={sum(device_rejects.values())}")
+    else:
+        for device, shard in active_shards:
+            outputs, rows, device_rejects = run_augmentation_jobs_on_device(device, shard, total_jobs, backend)
+            merge_device_results(outputs, rows, device_rejects)
+
     manifest_rows = sorted(manifest_rows, key=lambda row: row["seed"])
     all_outputs = [Path(row["output_path"]) for row in manifest_rows]
     if write_manifest_file:
