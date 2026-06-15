@@ -59,6 +59,7 @@ try:
         ADDIT_W_SOURCE_END,
         ADDIT_W_SOURCE_START,
         RESOLUTION,
+        TRAIN_DEVICE,
         VARIANT_PROMPTS,
     )
     from .addit_core import (
@@ -104,6 +105,7 @@ except ImportError:
         ADDIT_W_SOURCE_END,
         ADDIT_W_SOURCE_START,
         RESOLUTION,
+        TRAIN_DEVICE,
         VARIANT_PROMPTS,
     )
     from addit_core import (
@@ -166,13 +168,15 @@ class AddItCityPersonsPipeline:
         Path / name of the YOLOv8m-seg model for validation.
     """
 
-    def __init__(self, sd35_pipe, yolo_model_path: str = "yolov8m-seg.pt"):
+    def __init__(self, sd35_pipe, yolo_model_path: str = "yolov8m-seg.pt", device: Optional[str] = None):
         self.pipe = sd35_pipe
         self.vae = sd35_pipe.vae
         self.transformer = sd35_pipe.transformer
         self.scheduler = sd35_pipe.scheduler
-        self.device = next(sd35_pipe.transformer.parameters()).device
-        self.dtype = next(sd35_pipe.transformer.parameters()).dtype
+        first_param = next(sd35_pipe.transformer.parameters())
+        self.param_device = first_param.device
+        self.device = torch.device(device or getattr(sd35_pipe, "_execution_device", None) or TRAIN_DEVICE)
+        self.dtype = first_param.dtype
 
         # Attention state & original processors
         self.state = AddItState()
