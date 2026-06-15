@@ -618,10 +618,11 @@ def match_pasted_edge_to_composite_mean(result_crop, person_mask):
         return result_crop
 
     arr = np.asarray(result_crop.convert("RGB"), dtype=np.float32)
-    blurred = np.asarray(result_crop.convert("RGB").filter(ImageFilter.GaussianBlur(radius=0.45)), dtype=np.float32)
+    blurred = np.asarray(result_crop.convert("RGB").filter(ImageFilter.GaussianBlur(radius=0.65)), dtype=np.float32)
     local_mean = blended_background_mean_map(result_crop, person_mask)
-    softened = arr * 0.38 + blurred * 0.62
-    mean_matched = softened * 0.42 + local_mean * 0.58
+    softened = arr * 0.30 + blurred * 0.70
+    bg_blend = float(np.clip(EDGE_HORIZON_BG_BLEND, 0.0, 1.0))
+    mean_matched = softened * (1.0 - bg_blend) + local_mean * bg_blend
     edge_alpha_3 = np.expand_dims(np.clip(edge_alpha, 0.0, 1.0), axis=2)
     matched = arr * (1.0 - edge_alpha_3) + mean_matched * edge_alpha_3
     return Image.fromarray(np.clip(matched, 0, 255).astype(np.uint8), mode="RGB")
