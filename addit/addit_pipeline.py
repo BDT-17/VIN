@@ -18,6 +18,7 @@ import gc
 import json
 import random
 import time
+import traceback
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -464,6 +465,7 @@ class AddItCityPersonsPipeline:
             except Exception as exc:
                 print(f"  Add-it denoise failed (attempt {attempt + 1}): "
                       f"{type(exc).__name__}: {exc}")
+                traceback.print_exc(limit=6)
                 continue
 
             # Validate with YOLO (lightweight check)
@@ -561,6 +563,7 @@ class AddItCityPersonsPipeline:
                 result = self.run_single(record, variant, seed=image_seed, device=device)
             except Exception as exc:
                 print(f"  ERROR: {type(exc).__name__}: {exc}")
+                traceback.print_exc(limit=6)
                 result = AddItResult(
                     success=False,
                     variant=variant,

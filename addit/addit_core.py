@@ -86,9 +86,10 @@ class AddItJointAttnProcessor2_0:
       with the cached source K,V, weighted by ``state.w_source``.
     """
 
-    def __init__(self, layer_idx: int, state: AddItState):
+    def __init__(self, layer_idx: int, state: AddItState, original_processor=None):
         self.layer_idx = layer_idx
         self.state = state
+        self.original_processor = original_processor
 
     # -----------------------------------------------------------------
     # Main entry
@@ -105,24 +106,24 @@ class AddItJointAttnProcessor2_0:
         # Disabled — vanilla SD3.5 joint attention
         if not self.state.enabled:
             return self._standard_attention(
-                attn, hidden_states, encoder_hidden_states, attention_mask
+                attn, hidden_states, encoder_hidden_states, attention_mask, *args, **kwargs
             )
 
         # Cache mode — run normal attention, also save K,V
         if self.state.cache_mode:
             return self._cache_attention(
-                attn, hidden_states, encoder_hidden_states, attention_mask
+                attn, hidden_states, encoder_hidden_states, attention_mask, *args, **kwargs
             )
 
         # Inject mode — extend K,V with cached source features
         if self.state.inject_mode and self._should_inject():
             return self._extended_attention(
-                attn, hidden_states, encoder_hidden_states, attention_mask
+                attn, hidden_states, encoder_hidden_states, attention_mask, *args, **kwargs
             )
 
         # Layer outside injection range → standard attention
         return self._standard_attention(
-            attn, hidden_states, encoder_hidden_states, attention_mask
+            attn, hidden_states, encoder_hidden_states, attention_mask, *args, **kwargs
         )
 
     # -----------------------------------------------------------------
@@ -141,7 +142,17 @@ class AddItJointAttnProcessor2_0:
         return tensor.view(B, N, heads, D // heads).transpose(1, 2)
 
     # ----- Standard JointAttnProcessor2_0 behaviour --------------------
-    def _standard_attention(self, attn, hidden_states, encoder_hidden_states, attention_mask):
+    def _standard_attention(self, attn, hidden_states, encoder_hidden_states, attention_mask, *args, **kwargs):
+        if self.original_processor is not None:
+            return self.original_processor(
+                attn,
+                hidden_states,
+                encoder_hidden_states=encoder_hidden_states,
+                attention_mask=attention_mask,
+                *args,
+                **kwargs,
+            )
+
         B = hidden_states.shape[0]
         inner_dim = attn.to_k(hidden_states).shape[-1]
         head_dim = inner_dim // attn.heads
@@ -169,6 +180,8 @@ class AddItJointAttnProcessor2_0:
             enc_out, img_out = out[:, :enc_seq], out[:, enc_seq:]
             img_out = attn.to_out[0](img_out)
             img_out = attn.to_out[1](img_out)
+            if getattr(attn, "to_add_out", None) is None:
+                return img_out
             enc_out = attn.to_add_out(enc_out)
             return img_out, enc_out
 
@@ -177,19 +190,34 @@ class AddItJointAttnProcessor2_0:
         return out
 
     # ----- Cache mode: standard attention + store K,V -------------------
-    def _cache_attention(self, attn, hidden_states, encoder_hidden_states, attention_mask):
+    def _cache_attention(self, attn, hidden_states, encoder_hidden_states, attention_mask, *args, **kwargs):
         # Compute image K,V and cache them
-        key_img = self._reshape_heads(attn.to_k(hidden_states), attn.heads)
-        value_img = self._reshape_heads(attn.to_v(hidden_states), attn.heads)
-        self.state.kv_cache[self.layer_idx] = (
-            key_img.detach().clone(),
-            value_img.detach().clone(),
-        )
+        if getattr(attn, "to_k", None) is not None and getattr(attn, "to_v", None) is not None:
+            key_img = self._reshape_heads(attn.to_k(hidden_states), attn.heads)
+            value_img = self._reshape_heads(attn.to_v(hidden_states), attn.heads)
+            self.state.kv_cache[self.layer_idx] = (
+                key_img.detach().clone(),
+                value_img.detach().clone(),
+            )
         # Then run normal attention for the source forward pass
-        return self._standard_attention(attn, hidden_states, encoder_hidden_states, attention_mask)
+        return self._standard_attention(
+            attn, hidden_states, encoder_hidden_states, attention_mask, *args, **kwargs
+        )
 
     # ----- Inject mode: extended attention with cached source K,V -------
-    def _extended_attention(self, attn, hidden_states, encoder_hidden_states, attention_mask):
+    def _extended_attention(self, attn, hidden_states, encoder_hidden_states, attention_mask, *args, **kwargs):
+        required = ("to_q", "to_k", "to_v", "to_out")
+        if any(getattr(attn, name, None) is None for name in required):
+            return self._standard_attention(
+                attn, hidden_states, encoder_hidden_states, attention_mask, *args, **kwargs
+            )
+        if encoder_hidden_states is not None:
+            context_required = ("add_q_proj", "add_k_proj", "add_v_proj", "to_add_out")
+            if any(getattr(attn, name, None) is None for name in context_required):
+                return self._standard_attention(
+                    attn, hidden_states, encoder_hidden_states, attention_mask, *args, **kwargs
+                )
+
         B = hidden_states.shape[0]
         inner_dim = attn.to_k(hidden_states).shape[-1]
         head_dim = inner_dim // attn.heads
@@ -259,7 +287,11 @@ def inject_addit_processors(transformer, state: AddItState):
     new_processors = {}
     for idx, (name, module) in enumerate(transformer.attn_processors.items()):
         original[name] = module
-        new_processors[name] = AddItJointAttnProcessor2_0(layer_idx=idx, state=state)
+        new_processors[name] = AddItJointAttnProcessor2_0(
+            layer_idx=idx,
+            state=state,
+            original_processor=module,
+        )
     transformer.set_attn_processor(new_processors)
     return original
 
