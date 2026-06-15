@@ -32,6 +32,7 @@ try:
     from .addit_config import (
         ADDIT_ATTENTION_LAYER_RANGE,
         ADDIT_ATTENTION_SCHEDULE,
+        ADDIT_WEIGHTED_EXTENDED_ATTENTION,
         ADDIT_BLEND_END_RATIO,
         ADDIT_BLEND_FEATHER_LATENT,
         ADDIT_BLEND_START_RATIO,
@@ -75,6 +76,7 @@ except ImportError:
     from addit_config import (
         ADDIT_ATTENTION_LAYER_RANGE,
         ADDIT_ATTENTION_SCHEDULE,
+        ADDIT_WEIGHTED_EXTENDED_ATTENTION,
         ADDIT_BLEND_END_RATIO,
         ADDIT_BLEND_FEATHER_LATENT,
         ADDIT_BLEND_START_RATIO,
@@ -313,9 +315,11 @@ class AddItCityPersonsPipeline:
         tgt_pooled = target_embeds[2]
         tgt_neg_pooled = target_embeds[3]
 
-        # ── 5. Inject Add-it attention processors ──
-        self._original_processors = inject_addit_processors(self.transformer, self.state)
-        self.state.enabled = True
+        # ── 5. Optional Add-it attention processors ──
+        attention_enabled = bool(ADDIT_WEIGHTED_EXTENDED_ATTENTION)
+        if attention_enabled:
+            self._original_processors = inject_addit_processors(self.transformer, self.state)
+            self.state.enabled = True
 
         try:
             latent = initial_latent
@@ -341,12 +345,13 @@ class AddItCityPersonsPipeline:
 
                 # 5c. Cache source K,V (source forward pass)
                 t_batch = t.unsqueeze(0).to(device) if t.dim() == 0 else t.to(device)
-                self._cache_source_kv(
-                    source_noised_t, t_batch, src_prompt_emb, src_pooled,
-                )
+                if attention_enabled:
+                    self._cache_source_kv(
+                        source_noised_t, t_batch, src_prompt_emb, src_pooled,
+                    )
 
                 # 5d. Target forward with CFG (classifier-free guidance)
-                self.state.inject_mode = True
+                self.state.inject_mode = attention_enabled
                 latent_model_input = torch.cat([latent, latent])
                 prompt_embeds_cfg = torch.cat([tgt_neg_emb, tgt_prompt_emb])
                 pooled_cfg = torch.cat([tgt_neg_pooled, tgt_pooled])
