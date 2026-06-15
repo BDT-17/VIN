@@ -23,7 +23,7 @@ from sd35_config import *  # noqa: F401,F403
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. Weighted Extended-Attention
 # ═══════════════════════════════════════════════════════════════════════════
-ADDIT_WEIGHTED_EXTENDED_ATTENTION = True  # Enable extended attention
+ADDIT_WEIGHTED_EXTENDED_ATTENTION = False  # Enable extended attention
 ADDIT_ATTENTION_SCHEDULE = "cosine"       # cosine | linear | constant
 ADDIT_W_SOURCE_START     = 0.70           # w_source at step 0 (noisy)
 ADDIT_W_SOURCE_END       = 0.05           # w_source at final step (clean)
