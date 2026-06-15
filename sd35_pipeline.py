@@ -31,6 +31,7 @@ from sd35_config import *
 from sd35_data import build_generation_prompt, build_variant_negative_prompt
 from sd35_utils import *
 from sd35_evaluation import *
+from sd35_edge_harmonization import harmonize_pedestrian_edge
 
 def add_contact_shadow(image, insert_bbox, variant):
     if not CONTACT_SHADOW_ENABLED:
@@ -811,7 +812,7 @@ def apply_foreground_occlusion_mask(person_mask, occlusion_mask, crop_bbox):
     return Image.fromarray(kept, mode="L"), occlusion_crop, {"foreground_occlusion_removed_ratio": round(removed_ratio, 4)}
 
 
-def paste_crop_person_to_original(source, generated_crop, person_mask_crop, crop_bbox, occlusion_mask=None):
+def paste_crop_person_to_original(source, generated_crop, person_mask_crop, crop_bbox, occlusion_mask=None, edge_debug_context=None):
     cx1, cy1, cx2, cy2 = crop_bbox
     crop_w = cx2 - cx1
     crop_h = cy2 - cy1
@@ -840,6 +841,17 @@ def paste_crop_person_to_original(source, generated_crop, person_mask_crop, crop
     result_crop = result.crop(crop_bbox)
     result_crop = match_pasted_edge_to_composite_mean(result_crop, person_mask)
     blend_meta["edge_local_bg_match_used"] = True
+    edge_result = harmonize_pedestrian_edge(
+        source_crop,
+        result_crop,
+        person_mask,
+        insert_bbox=(0, 0, crop_w, crop_h),
+        yolo_mask=person_mask,
+        debug_context=edge_debug_context,
+    )
+    result_crop = edge_result.image
+    person_mask = edge_result.mask
+    blend_meta.update(edge_result.metadata)
     result_crop = apply_addit_subject_guided_blend(source_crop, result_crop, person_mask)
     if occlusion_crop is not None:
         result_crop = Image.composite(source_crop, result_crop, occlusion_crop)
@@ -957,7 +969,20 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
             **occlusion_meta,
             **scale_meta,
         }
-        result, pasted_mask, blend_meta = paste_crop_person_to_original(source, generated_crop, person_mask_crop, crop_bbox, occlusion_mask=occlusion_mask)
+        edge_debug_context = {
+            "record": record,
+            "variant": variant,
+            "seed": seed,
+            "debug_index": debug_index,
+        }
+        result, pasted_mask, blend_meta = paste_crop_person_to_original(
+            source,
+            generated_crop,
+            person_mask_crop,
+            crop_bbox,
+            occlusion_mask=occlusion_mask,
+            edge_debug_context=edge_debug_context,
+        )
         insert_meta.update(blend_meta)
         is_valid, final_reason, final_meta = validate_composite_result(
             source,
@@ -980,6 +1005,7 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
             debug_mask = Image.new("L", source.size, 0)
             debug_mask.paste(pasted_mask, (crop_bbox[0], crop_bbox[1]))
             result = add_contact_shadow(result, insert_bbox, variant)
+            final_meta["contact_shadow_applied"] = bool(CONTACT_SHADOW_ENABLED)
             debug_generated = source.copy()
             debug_generated.paste(
                 generated_crop.resize((crop_bbox[2] - crop_bbox[0], crop_bbox[3] - crop_bbox[1]), Image.LANCZOS),

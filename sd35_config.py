@@ -342,6 +342,15 @@ GENERATION_CONFIG = {'AUGMENTATION_STRENGTH': 0.72, 'GUIDANCE_SCALE': 7.2, 'NUM_
 
 DEBUG_CONFIG = {'DEBUG_SCALE_VISUALIZATION': False}
 
+EDGE_HARMONIZATION_CONFIG = {
+ 'EDGE_HARMONIZATION_ENABLED': True,
+ 'EDGE_FEATHER_RADIUS': 7,
+ 'EDGE_BLUR_RADIUS': 3,
+ 'EDGE_COLOR_MATCH_STRENGTH': 0.35,
+ 'EDGE_BAND_WIDTH': 12,
+ 'POISSON_BLEND_ENABLED': False,
+}
+
 ADDIT_CONFIG = {
  'ADDIT_CONCEPT_ENABLED': True,
  'ADDIT_WEIGHTED_EXTENDED_ATTENTION': False,
@@ -365,6 +374,7 @@ CONFIG_GROUPS = [
     RETRY_CONFIG,
     GENERATION_CONFIG,
     DEBUG_CONFIG,
+    EDGE_HARMONIZATION_CONFIG,
     ADDIT_CONFIG,
 ]
 
@@ -424,6 +434,7 @@ METRICS_CSV_PATH = METRICS_DIR / "augmentation_metrics.csv"
 METRICS_SUMMARY_PATH = METRICS_DIR / "augmentation_metrics_summary.csv"
 METRICS_PLOT_PATH = METRICS_DIR / "augmentation_metrics_by_variant.png"
 PATCH_DEBUG_DIR = OUTPUT_DIR / "patch_debug"
+EDGE_DEBUG_DIR = OUTPUT_DIR / "edge_harmonization_debug"
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 BASE_CAPTION = "urban street photo"
@@ -449,8 +460,10 @@ def ensure_output_dirs():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     METRICS_DIR.mkdir(parents=True, exist_ok=True)
     PATCH_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+    EDGE_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
     return {
         "output_dir": OUTPUT_DIR,
         "metrics_dir": METRICS_DIR,
         "patch_debug_dir": PATCH_DEBUG_DIR,
+        "edge_debug_dir": EDGE_DEBUG_DIR,
     }
