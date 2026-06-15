@@ -33,11 +33,46 @@ ADDIT_REFERENCE_DEBUG_DIR = Path(globals().get("ADDIT_REFERENCE_DEBUG_DIR", OUTP
 globals().setdefault("ADDIT_REFERENCE_ENABLED", True)
 
 
-def addit_reference_flag_enabled():
+def addit_ref_value(name, default):
     config = globals().get("EFFECTIVE_CONFIG", {})
-    if isinstance(config, dict) and "ADDIT_REFERENCE_ENABLED" in config:
-        return bool(config["ADDIT_REFERENCE_ENABLED"])
-    return bool(globals().get("ADDIT_CONFIG", {}).get("ADDIT_REFERENCE_ENABLED", True))
+    if isinstance(config, dict) and name in config:
+        return config[name]
+    addit_config = globals().get("ADDIT_CONFIG", {})
+    if isinstance(addit_config, dict) and name in addit_config:
+        return addit_config[name]
+    return globals().get(name, default)
+
+
+def addit_reference_flag_enabled():
+    return bool(addit_ref_value("ADDIT_REFERENCE_ENABLED", True))
+
+
+def addit_num_candidates():
+    return int(addit_ref_value("ADDIT_NUM_CANDIDATES", 3))
+
+
+def addit_min_person_conf():
+    return float(addit_ref_value("ADDIT_MIN_PERSON_CONF", 0.35))
+
+
+def addit_max_existing_iou():
+    return float(addit_ref_value("ADDIT_MAX_EXISTING_IOU", 0.25))
+
+
+def addit_save_references():
+    return bool(addit_ref_value("ADDIT_SAVE_REFERENCES", True))
+
+
+def addit_retry_seed_step():
+    return int(addit_ref_value("ADDIT_RETRY_SEED_STEP", 9973))
+
+
+def addit_reference_dir():
+    return Path(addit_ref_value("ADDIT_REFERENCE_DIR", OUTPUT_DIR / "addit_references"))
+
+
+def addit_reference_debug_dir():
+    return Path(addit_ref_value("ADDIT_REFERENCE_DEBUG_DIR", OUTPUT_DIR / "debug_addit_reference"))
 
 
 @dataclass
@@ -155,9 +190,9 @@ def _validate_candidate_bbox(detection, source_persons, semantic_masks, depth_ma
         depth_ok, _overlap = person_overlap_depth_ok(bbox, old_bbox)
         if not depth_ok:
             return False, "overlaps_existing_person_depth", max_existing_iou, bbox
-    if max_existing_iou > ADDIT_MAX_EXISTING_IOU:
+    if max_existing_iou > addit_max_existing_iou():
         return False, "overlaps_existing_person", max_existing_iou, bbox
-    if detection["conf"] < ADDIT_MIN_PERSON_CONF:
+    if detection["conf"] < addit_min_person_conf():
         return False, "low_person_conf", max_existing_iou, bbox
     if detection.get("mask_bbox") is not None and mask_bbox_touches_border(detection["mask_bbox"], image_size):
         return False, "partial_or_cropped_body", max_existing_iou, bbox
@@ -179,7 +214,7 @@ def _validate_candidate_bbox(detection, source_persons, semantic_masks, depth_ma
 
 
 def _save_candidate_debug(record, source, candidate, hint):
-    debug_dir = ADDIT_REFERENCE_DEBUG_DIR / record.split / record.bucket
+    debug_dir = addit_reference_debug_dir() / record.split / record.bucket
     debug_dir.mkdir(parents=True, exist_ok=True)
     overlay = candidate.copy()
     draw = ImageDraw.Draw(overlay)
@@ -199,7 +234,7 @@ def _save_candidate_debug(record, source, candidate, hint):
 
 
 def _save_reference_candidate(record, candidate, variant, seed, candidate_id):
-    out_dir = ADDIT_REFERENCE_DIR / record.split / variant
+    out_dir = addit_reference_dir() / record.split / variant
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{record.path.stem}_addit_ref_{candidate_id:02d}_{seed}.png"
     candidate.save(out_path)
@@ -236,7 +271,7 @@ def extract_addit_reference_hint(source, candidate, record, variant, candidate_i
         if bbox is None:
             rejected.append(reason)
             continue
-        novelty = 1.0 - min(1.0, existing_iou / max(1e-6, ADDIT_MAX_EXISTING_IOU))
+        novelty = 1.0 - min(1.0, existing_iou / max(1e-6, addit_max_existing_iou()))
         change = _change_score(source, candidate, bbox)
         score = float(det["conf"]) + 0.35 * novelty + 0.25 * change
         item = (score, valid, reason, bbox, scale, existing_iou, det, change)
@@ -289,8 +324,8 @@ def generate_addit_reference_hints(pipe, source, record, variant, seed, device=T
     hints: List[AddItReferenceHint] = []
     addit_pipe = AddItCityPersonsPipeline(pipe, yolo_model_path=CONTEXT_PERSON_SEGMENTATION_MODEL, device=device)
     depth_map = estimate_depth_map(source, device="cpu")
-    for candidate_id in range(max(1, ADDIT_NUM_CANDIDATES)):
-        candidate_seed = seed + candidate_id * ADDIT_RETRY_SEED_STEP
+    for candidate_id in range(max(1, addit_num_candidates())):
+        candidate_seed = seed + candidate_id * addit_retry_seed_step()
         try:
             result = addit_pipe.run_single(record, variant, seed=candidate_seed, device=device)
             candidate = result.result_image.resize(source.size) if result and result.result_image is not None else None
@@ -302,7 +337,7 @@ def generate_addit_reference_hints(pipe, source, record, variant, seed, device=T
                 ))
                 continue
             candidate_path = ""
-            if ADDIT_SAVE_REFERENCES:
+            if addit_save_references():
                 candidate_path = _save_reference_candidate(record, candidate, variant, candidate_seed, candidate_id)
             hint = extract_addit_reference_hint(
                 source,
@@ -339,7 +374,7 @@ def first_valid_addit_hint(hints):
 def save_addit_final_debug(record, final_image, insert_bbox, metadata, seed, variant):
     if not addit_reference_flag_enabled():
         return ""
-    debug_dir = ADDIT_REFERENCE_DEBUG_DIR / record.split / record.bucket
+    debug_dir = addit_reference_debug_dir() / record.split / record.bucket
     debug_dir.mkdir(parents=True, exist_ok=True)
     source = resize_center_crop(load_source_image(record.path), resolution=final_image.size[0])
     overlay = final_image.copy()
