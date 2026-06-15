@@ -69,6 +69,44 @@ def addit_fallback_to_heuristic():
     return bool(globals().get("ADDIT_CONFIG", {}).get("ADDIT_FALLBACK_TO_HEURISTIC", True))
 
 
+def addit_cfg_value(name, default):
+    config = globals().get("EFFECTIVE_CONFIG", {})
+    if isinstance(config, dict) and name in config:
+        return config[name]
+    addit_config = globals().get("ADDIT_CONFIG", {})
+    if isinstance(addit_config, dict) and name in addit_config:
+        return addit_config[name]
+    return globals().get(name, default)
+
+
+def addit_concept_enabled():
+    return bool(addit_cfg_value("ADDIT_CONCEPT_ENABLED", True))
+
+
+def addit_subject_guided_blend_enabled():
+    return bool(addit_cfg_value("ADDIT_SUBJECT_GUIDED_BLEND_PROXY", True))
+
+
+def addit_blend_context_dilate():
+    return int(addit_cfg_value("ADDIT_BLEND_CONTEXT_DILATE", 3))
+
+
+def addit_blend_edge_radius():
+    return float(addit_cfg_value("ADDIT_BLEND_EDGE_RADIUS", 2.5))
+
+
+def addit_blend_shadow_extension():
+    return float(addit_cfg_value("ADDIT_BLEND_SHADOW_EXTENSION", 0.22))
+
+
+def addit_blend_shadow_alpha():
+    return float(addit_cfg_value("ADDIT_BLEND_SHADOW_ALPHA", 0.24))
+
+
+def addit_blend_shadow_blur():
+    return float(addit_cfg_value("ADDIT_BLEND_SHADOW_BLUR", 5.0))
+
+
 def sync_addit_reference_module_flags():
     module = sys.modules.get("addit_reference")
     if module is None:
@@ -737,7 +775,7 @@ def addit_subject_guided_blend_mask(person_mask, variant=None):
     outside transition ring and the foot-contact shadow region, so background
     cannot eat into the person silhouette.
     """
-    if not ADDIT_SUBJECT_GUIDED_BLEND_PROXY:
+    if not addit_subject_guided_blend_enabled():
         return person_mask.convert("L")
     mask = person_mask.convert("L")
     bbox = mask.getbbox()
@@ -748,14 +786,14 @@ def addit_subject_guided_blend_mask(person_mask, variant=None):
     h = max(1, y2 - y1)
 
     hard = mask.point(lambda p: 255 if p >= PERSON_PASTE_HARD_THRESHOLD else 0)
-    dilate_px = max(0, int(round(ADDIT_BLEND_CONTEXT_DILATE)))
+    dilate_px = max(0, int(round(addit_blend_context_dilate())))
     if dilate_px > 0:
         dilated = hard.filter(ImageFilter.MaxFilter(dilate_px * 2 + 1))
     else:
         dilated = hard
 
     outside_ring = ImageChops.subtract(dilated, hard)
-    outside_soft = outside_ring.filter(ImageFilter.GaussianBlur(radius=max(0.0, ADDIT_BLEND_EDGE_RADIUS)))
+    outside_soft = outside_ring.filter(ImageFilter.GaussianBlur(radius=max(0.0, addit_blend_edge_radius())))
     hard_arr = np.asarray(hard, dtype=np.float32) / 255.0
     outside_arr = np.asarray(outside_soft, dtype=np.float32) / 255.0
     outside_arr = outside_arr * (1.0 - hard_arr)
@@ -763,14 +801,14 @@ def addit_subject_guided_blend_mask(person_mask, variant=None):
 
     shadow = Image.new("L", mask.size, 0)
     draw = ImageDraw.Draw(shadow)
-    shadow_h = max(3, int(round(h * ADDIT_BLEND_SHADOW_EXTENSION)))
+    shadow_h = max(3, int(round(h * addit_blend_shadow_extension())))
     sx1 = max(0, int(round(x1 - w * 0.18)))
     sx2 = min(mask.size[0], int(round(x2 + w * 0.18)))
     sy1 = max(0, int(round(y2 - h * 0.02)))
     sy2 = min(mask.size[1], int(round(y2 + shadow_h)))
     if sx2 > sx1 and sy2 > sy1:
-        draw.ellipse((sx1, sy1, sx2, sy2), fill=int(255 * max(0.0, min(1.0, ADDIT_BLEND_SHADOW_ALPHA))))
-        shadow = shadow.filter(ImageFilter.GaussianBlur(radius=max(0.0, ADDIT_BLEND_SHADOW_BLUR)))
+        draw.ellipse((sx1, sy1, sx2, sy2), fill=int(255 * max(0.0, min(1.0, addit_blend_shadow_alpha()))))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(radius=max(0.0, addit_blend_shadow_blur())))
         shadow_arr = np.asarray(shadow, dtype=np.float32) / 255.0
         shadow_arr = shadow_arr * (1.0 - hard_arr)
         shadow = Image.fromarray(np.clip(shadow_arr * 255.0, 0, 255).astype(np.uint8), mode="L")
@@ -779,7 +817,7 @@ def addit_subject_guided_blend_mask(person_mask, variant=None):
 
 
 def apply_addit_subject_guided_blend(source_crop, target_crop, person_mask, variant=None):
-    if not ADDIT_CONCEPT_ENABLED or not ADDIT_SUBJECT_GUIDED_BLEND_PROXY:
+    if not addit_concept_enabled() or not addit_subject_guided_blend_enabled():
         return target_crop
     blend_mask = addit_subject_guided_blend_mask(person_mask, variant=variant)
     return Image.composite(target_crop.convert("RGB"), source_crop.convert("RGB"), blend_mask)
