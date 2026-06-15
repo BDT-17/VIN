@@ -3,7 +3,6 @@
 import csv
 import gc
 import json
-import sys
 from datetime import datetime
 import math
 import numpy as np
@@ -32,13 +31,7 @@ from sd35_config import *
 from sd35_data import build_generation_prompt, build_variant_negative_prompt
 from sd35_utils import *
 from sd35_evaluation import *
-from addit_reference import (
-    addit_reference_meta_from_hint,
-    empty_addit_reference_fields,
-    first_valid_addit_hint,
-    generate_addit_reference_hints,
-    save_addit_final_debug,
-)
+import addit_reference as addit_reference_module
 
 
 ADDIT_FINAL_RETRY_REASONS = set(globals().get("ADDIT_REFERENCE_RETRY_REASONS", {
@@ -108,7 +101,7 @@ def addit_blend_shadow_blur():
 
 
 def sync_addit_reference_module_flags():
-    module = sys.modules.get("addit_reference")
+    module = addit_reference_module
     if module is None:
         return
     defaults = {
@@ -122,19 +115,18 @@ def sync_addit_reference_module_flags():
         "ADDIT_REFERENCE_DEBUG_DIR": globals().get("ADDIT_REFERENCE_DEBUG_DIR", OUTPUT_DIR / "debug_addit_reference"),
     }
     for name, value in defaults.items():
-        if not hasattr(module, name):
-            setattr(module, name, value)
+        setattr(module, name, value)
 
 
 def addit_hint_metadata(hint, placement_source=None):
-    meta = addit_reference_meta_from_hint(hint)
+    meta = addit_reference_module.addit_reference_meta_from_hint(hint)
     if placement_source is not None:
         meta["placement_source"] = placement_source
     return meta
 
 
 def heuristic_placement_metadata(reason=""):
-    meta = empty_addit_reference_fields(reason)
+    meta = addit_reference_module.empty_addit_reference_fields(reason)
     meta["placement_source"] = "heuristic"
     return meta
 
@@ -1294,8 +1286,8 @@ def generate_variant_with_pipe(pipe, record, variant, output_path, seed, device=
     addit_hints = []
     if addit_reference_enabled():
         sync_addit_reference_module_flags()
-        addit_hints = generate_addit_reference_hints(pipe, source, record, variant, seed, device=device)
-        if not first_valid_addit_hint(addit_hints) and not addit_fallback_to_heuristic():
+        addit_hints = addit_reference_module.generate_addit_reference_hints(pipe, source, record, variant, seed, device=device)
+        if not addit_reference_module.first_valid_addit_hint(addit_hints) and not addit_fallback_to_heuristic():
             first_reason = next((hint.reject_reason for hint in addit_hints if hint.reject_reason), "no_valid_addit_hint")
             raise RuntimeError(f"Add-it reference hint failed and heuristic fallback is disabled ({first_reason}).")
     if BACKGROUND_PRESERVATION_MODE == "context_person_composite":
@@ -1331,7 +1323,8 @@ def generate_variant_with_pipe(pipe, record, variant, output_path, seed, device=
         patch_bbox = None
         debug_path = ""
     image.save(output_path)
-    addit_final_debug_path = save_addit_final_debug(record, image, insert_bbox, scale_meta, seed, variant)
+    sync_addit_reference_module_flags()
+    addit_final_debug_path = addit_reference_module.save_addit_final_debug(record, image, insert_bbox, scale_meta, seed, variant)
     clear_cuda()
     return output_path, {
         "strength": strength,
