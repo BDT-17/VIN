@@ -33,6 +33,10 @@ ADDIT_REFERENCE_DIR = Path(globals().get("ADDIT_REFERENCE_DIR", OUTPUT_DIR / "ad
 ADDIT_REFERENCE_DEBUG_DIR = Path(globals().get("ADDIT_REFERENCE_DEBUG_DIR", OUTPUT_DIR / "debug_addit_reference"))
 
 
+def addit_reference_enabled():
+    return bool(globals().get("ADDIT_REFERENCE_ENABLED", True))
+
+
 @dataclass
 class AddItReferenceHint:
     valid: bool = False
@@ -271,7 +275,7 @@ def extract_addit_reference_hint(source, candidate, record, variant, candidate_i
 
 
 def generate_addit_reference_hints(pipe, source, record, variant, seed, device=TRAIN_DEVICE):
-    if not ADDIT_REFERENCE_ENABLED:
+    if not addit_reference_enabled():
         return []
     try:
         from addit.addit_pipeline import AddItCityPersonsPipeline
@@ -330,7 +334,7 @@ def first_valid_addit_hint(hints):
 
 
 def save_addit_final_debug(record, final_image, insert_bbox, metadata, seed, variant):
-    if not ADDIT_REFERENCE_ENABLED:
+    if not addit_reference_enabled():
         return ""
     debug_dir = ADDIT_REFERENCE_DEBUG_DIR / record.split / record.bucket
     debug_dir.mkdir(parents=True, exist_ok=True)
