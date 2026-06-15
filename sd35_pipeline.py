@@ -56,14 +56,6 @@ ADDIT_FINAL_RETRY_REASONS = set(globals().get("ADDIT_REFERENCE_RETRY_REASONS", {
 }))
 
 
-def addit_reference_enabled():
-    return bool(globals().get("ADDIT_REFERENCE_ENABLED", ADDIT_REFERENCE_ENABLED))
-
-
-def addit_fallback_to_heuristic():
-    return bool(globals().get("ADDIT_FALLBACK_TO_HEURISTIC", ADDIT_FALLBACK_TO_HEURISTIC))
-
-
 def addit_hint_metadata(hint, placement_source=None):
     meta = addit_reference_meta_from_hint(hint)
     if placement_source is not None:
@@ -79,7 +71,7 @@ def heuristic_placement_metadata(reason=""):
 
 def select_insert_bbox_with_addit_hint(record, source, variant, rng, device=TRAIN_DEVICE, depth_map=None, hints=None, hint_index=0):
     hint = None
-    if addit_reference_enabled() and hints:
+    if ADDIT_REFERENCE_ENABLED and hints:
         valid_hints = [candidate for candidate in hints if candidate.valid and candidate.insert_bbox is not None]
         if hint_index < len(valid_hints):
             hint = valid_hints[hint_index]
@@ -102,7 +94,7 @@ def select_insert_bbox_with_addit_hint(record, source, variant, rng, device=TRAI
     )
     if insert_meta is None:
         insert_meta = {}
-    insert_meta.update(heuristic_placement_metadata("no_valid_addit_hint" if addit_reference_enabled() else "disabled"))
+    insert_meta.update(heuristic_placement_metadata("no_valid_addit_hint" if ADDIT_REFERENCE_ENABLED else "disabled"))
     return insert_bbox, insert_meta, None
 
 
@@ -1230,9 +1222,9 @@ def generate_variant_with_pipe(pipe, record, variant, output_path, seed, device=
     clear_cuda()
     scale_meta = default_scale_correction_metadata()
     addit_hints = []
-    if addit_reference_enabled():
+    if ADDIT_REFERENCE_ENABLED:
         addit_hints = generate_addit_reference_hints(pipe, source, record, variant, seed, device=device)
-        if not first_valid_addit_hint(addit_hints) and not addit_fallback_to_heuristic():
+        if not first_valid_addit_hint(addit_hints) and not ADDIT_FALLBACK_TO_HEURISTIC:
             first_reason = next((hint.reject_reason for hint in addit_hints if hint.reject_reason), "no_valid_addit_hint")
             raise RuntimeError(f"Add-it reference hint failed and heuristic fallback is disabled ({first_reason}).")
     if BACKGROUND_PRESERVATION_MODE == "context_person_composite":
