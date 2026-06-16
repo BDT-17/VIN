@@ -424,6 +424,11 @@ def build_retry_config(base_prompt, base_negative, reject_reason, strength, guid
         attempt_strength = max(0.62, attempt_strength - 0.02)
         attempt_prompt += ", separated depth, no body overlap, distinct silhouettes"
         attempt_negative += ", overlap, merged people, fused bodies, person on person"
+    elif reject_reason == "bad_placement":
+        attempt_strength = min(0.84, attempt_strength + 0.02)
+        attempt_guidance = min(8.2, attempt_guidance + 0.25)
+        attempt_prompt += ", exactly inside the marked placement area, centered on the guide"
+        attempt_negative += ", person outside marked area, wrong location"
     elif reject_reason == "floating_or_bad_ground":
         attempt_prompt += ", feet on road"
         attempt_negative += ", floating, on vehicle"
@@ -461,6 +466,7 @@ def should_retry(reason, attempt, max_retries, metadata=None):
         "partial_or_cropped",
         "not_enough_new_people",
         "bad_person_depth_overlap",
+        "bad_placement",
         "scale_unrecoverable",
         "floating_or_bad_ground",
         "too_small_or_ghost_person",
@@ -617,6 +623,7 @@ def normalize_reject_reason(reason_text):
         "partial_or_cropped_body",
         "partial_or_cropped",
         "bad_mask_quality",
+        "bad_placement",
         "no_person_detected",
     ]
     for reason in known_reasons:

@@ -393,13 +393,13 @@ def apply_subtle_scene_tone_filter(source_crop, person_rgb, person_mask):
 def harmonize_person_to_scene(source_crop, person_rgb, person_mask):
     person_rgb = color_match_person_crop(source_crop, person_rgb, person_mask)
     person_rgb = match_person_texture_to_scene(source_crop, person_rgb, person_mask)
-    # Activate existing helpers for fuller edge harmonization.
-    # All use foreground_harmonization_alpha: strong at edge, weak in core.
-    person_rgb = local_color_transfer(source_crop, person_rgb, person_mask, strength=0.45)
-    person_rgb = match_local_brightness(source_crop, person_rgb, person_mask, strength=0.50)
-    person_rgb = match_local_contrast(source_crop, person_rgb, person_mask, strength=0.35)
-    person_rgb = match_local_saturation(source_crop, person_rgb, person_mask, strength=0.30)
-    person_rgb = add_sensor_noise(source_crop, person_rgb, person_mask, strength=0.80)
+    # Keep harmonization mostly on the boundary. Strong core color matching made
+    # the generated person sink into the background and lose useful detail.
+    person_rgb = local_color_transfer(source_crop, person_rgb, person_mask, strength=0.22)
+    person_rgb = match_local_brightness(source_crop, person_rgb, person_mask, strength=0.28)
+    person_rgb = match_local_contrast(source_crop, person_rgb, person_mask, strength=0.18)
+    person_rgb = match_local_saturation(source_crop, person_rgb, person_mask, strength=0.14)
+    person_rgb = add_sensor_noise(source_crop, person_rgb, person_mask, strength=0.45)
     person_rgb = apply_subtle_scene_tone_filter(source_crop, person_rgb, person_mask)
     person_rgb = neutralize_person_edge_halo(source_crop, person_rgb, person_mask)
     person_rgb = soften_dark_person_edge(source_crop, person_rgb, person_mask)
@@ -867,8 +867,20 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
     existing_vehicle_bboxes = load_vehicle_bboxes_for_crop(record, original.size, resolution=source.size[0])
     semantic_masks = semantic_placement_masks(source, record, device=device)
     depth_map = estimate_depth_map(source, device="cpu")
-    generation_source = crop_source
-    mask_image = Image.new("L", crop_source.size, 0)
+    planned_insert_bbox, planned_insert_meta = find_insertion_region(
+        record,
+        source,
+        variant,
+        random.Random(seed),
+        device=device,
+        return_metadata=True,
+        depth_map=depth_map,
+    )
+    if planned_insert_bbox is None:
+        raise RuntimeError("No valid insertion region found (bad_placement)")
+    planned_insert_bbox = tuple(int(round(v)) for v in planned_insert_bbox)
+    generation_source = draw_person_guide_on_patch(crop_source, crop_bbox, planned_insert_bbox, variant)
+    mask_image = bbox_mask_for_bbox(crop_source.size, planned_insert_bbox, variant=variant, padding=4, blur=1)
     generator_device = device if str(device).startswith("cuda") else "cpu"
     max_retries = variant_retry_budget(variant)
     last_reject_reason = None
@@ -930,6 +942,37 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
                 continue
             break
 
+        target_window = expand_bbox_for_detection(planned_insert_bbox, source.size, factor=1.45)
+        det_area = max(1, bbox_area(detected_bbox))
+        target_overlap = bbox_intersection_area(detected_bbox, target_window) / det_area
+        planned_cx = (planned_insert_bbox[0] + planned_insert_bbox[2]) / 2.0
+        planned_cy = (planned_insert_bbox[1] + planned_insert_bbox[3]) / 2.0
+        det_cx = (detected_bbox[0] + detected_bbox[2]) / 2.0
+        det_cy = (detected_bbox[1] + detected_bbox[3]) / 2.0
+        center_distance = math.hypot(det_cx - planned_cx, det_cy - planned_cy) / max(1, source.size[0])
+        if target_overlap < 0.20 and center_distance > 0.18:
+            reject_reason = "bad_placement"
+            scale_unrecoverable_streak = 0
+            scale_meta.update({
+                "reject_reason": reject_reason,
+                "last_reject_reason": reject_reason,
+                "planned_insert_bbox": planned_insert_bbox,
+                "detected_bbox": tuple(float(v) for v in detected_bbox),
+                "target_overlap": round(target_overlap, 4),
+                "target_center_distance": round(center_distance, 4),
+                "scale_unrecoverable_streak": scale_unrecoverable_streak,
+            })
+            attempt_history.append(scale_meta)
+            last_reject_reason = reject_reason
+            last_reject_meta = scale_meta
+            print(
+                f"Generated person is away from planned placement "
+                f"(overlap={target_overlap:.2f}, center_distance={center_distance:.2f}); retrying."
+            )
+            if should_retry(reject_reason, attempt, max_retries, scale_meta):
+                continue
+            break
+
         insert_bbox = tuple(int(round(v)) for v in detected_bbox)
         outside_ratio = mask_outside_bbox_ratio(person_mask_crop, insert_bbox)
         if outside_ratio > MAX_MASK_OUTSIDE_INSERTION_RATIO:
@@ -961,9 +1004,10 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
             variant=variant,
         )
         insert_meta = {
-            "expected_person_height": insert_bbox[3] - insert_bbox[1],
-            "expected_person_width": insert_bbox[2] - insert_bbox[0],
-            "ground_y": insert_bbox[3],
+            "expected_person_height": (planned_insert_meta or {}).get("expected_person_height", insert_bbox[3] - insert_bbox[1]),
+            "expected_person_width": (planned_insert_meta or {}).get("expected_person_width", insert_bbox[2] - insert_bbox[0]),
+            "ground_y": (planned_insert_meta or {}).get("ground_y", insert_bbox[3]),
+            "planned_insert_bbox": planned_insert_bbox,
             "img2img_first": True,
             "retry_attempts": attempt,
             **occlusion_meta,
