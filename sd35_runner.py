@@ -106,7 +106,7 @@ def build_augmentation_jobs(records, variants, target_per_bucket, target_splits)
 
 def run_augmentation_jobs_on_device(device, jobs, total_jobs, backend):
     if not jobs:
-        return [], []
+        return [], [], {}
     if str(device).startswith("cuda"):
         torch.cuda.set_device(torch.device(device).index or 0)
     print(f"[{device}] loading pipeline for {len(jobs)} jobs")
@@ -231,10 +231,31 @@ def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKE
     all_outputs = []
     manifest_rows = []
     reject_histogram = {}
-    for device, shard in zip(devices, shards):
-        if not shard:
-            continue
-        outputs, rows, device_rejects = run_augmentation_jobs_on_device(device, shard, total_jobs, backend)
+    active_shards = [(device, shard) for device, shard in zip(devices, shards) if shard]
+    shard_summary = ", ".join(f"{device}:{len(shard)}" for device, shard in active_shards)
+    print(f"Device job split: {shard_summary}")
+
+    if len(active_shards) == 1:
+        device, shard = active_shards[0]
+        device_results = [run_augmentation_jobs_on_device(device, shard, total_jobs, backend)]
+    else:
+        max_workers = len(active_shards)
+        print(f"Running {max_workers} augmentation shards in parallel.")
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_device = {
+                executor.submit(run_augmentation_jobs_on_device, device, shard, total_jobs, backend): device
+                for device, shard in active_shards
+            }
+            device_results = []
+            for future in as_completed(future_to_device):
+                device = future_to_device[future]
+                try:
+                    device_results.append(future.result())
+                except Exception as exc:
+                    print(f"[{device}] shard failed: {type(exc).__name__}: {exc}")
+                    raise
+
+    for outputs, rows, device_rejects in device_results:
         all_outputs.extend(outputs)
         manifest_rows.extend(rows)
         for reason, count in device_rejects.items():

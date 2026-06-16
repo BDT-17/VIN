@@ -30,21 +30,30 @@ except ImportError:
 from sd35_config import *
 from sd35_utils import *
 
-PERSON_SEGMENTER = None
+PERSON_SEGMENTERS = {}
 
-def load_person_segmenter():
-    global PERSON_SEGMENTER
-    if PERSON_SEGMENTER is False:
+def _segmenter_device_key(device=None):
+    if device is None:
+        if torch.cuda.is_available():
+            return str(torch.cuda.current_device())
+        return "cpu"
+    return str(device)
+
+
+def load_person_segmenter(device=None):
+    device_key = _segmenter_device_key(device)
+    if PERSON_SEGMENTERS.get(device_key) is False:
         return None
-    if PERSON_SEGMENTER is not None:
-        return PERSON_SEGMENTER
+    if device_key in PERSON_SEGMENTERS:
+        return PERSON_SEGMENTERS[device_key]
     try:
         from ultralytics import YOLO
-        PERSON_SEGMENTER = YOLO(CONTEXT_PERSON_SEGMENTATION_MODEL)
-        print(f"Loaded person segmentation model: {CONTEXT_PERSON_SEGMENTATION_MODEL}")
-        return PERSON_SEGMENTER
+        segmenter = YOLO(CONTEXT_PERSON_SEGMENTATION_MODEL)
+        PERSON_SEGMENTERS[device_key] = segmenter
+        print(f"Loaded person segmentation model on {device_key}: {CONTEXT_PERSON_SEGMENTATION_MODEL}")
+        return segmenter
     except Exception as exc:
-        PERSON_SEGMENTER = False
+        PERSON_SEGMENTERS[device_key] = False
         print("Person segmentation unavailable; context_person_composite will use fallback if enabled.")
         print(type(exc).__name__, exc)
         return None
@@ -128,12 +137,12 @@ def person_mask_completeness_ok(raw_mask, raw_mask_bbox, det_bbox, target_bbox):
     return True, "ok"
 
 
-def select_generated_person_mask(generated_crop, target_bbox):
-    segmenter = load_person_segmenter()
+def select_generated_person_mask(generated_crop, target_bbox, device=None):
+    segmenter = load_person_segmenter(device=device)
     if segmenter is None:
         return None, None
     try:
-        results = segmenter.predict(generated_crop, imgsz=RESOLUTION, conf=CONTEXT_PERSON_MIN_CONFIDENCE, verbose=False)
+        results = segmenter.predict(generated_crop, imgsz=RESOLUTION, conf=CONTEXT_PERSON_MIN_CONFIDENCE, device=device, verbose=False)
     except Exception as exc:
         print("Person segmentation failed; using fallback if enabled.")
         print(type(exc).__name__, exc)
@@ -199,12 +208,12 @@ def select_generated_person_mask(generated_crop, target_bbox):
     return mask, tuple(float(v) for v in xyxy[best_index])
 
 
-def select_new_generated_person_mask(generated_image, existing_person_bboxes=None, semantic_masks=None, variant=None, background_image=None, depth_map=None):
-    segmenter = load_person_segmenter()
+def select_new_generated_person_mask(generated_image, existing_person_bboxes=None, semantic_masks=None, variant=None, background_image=None, depth_map=None, device=None):
+    segmenter = load_person_segmenter(device=device)
     if segmenter is None:
         return None, None, "segmenter_unavailable", default_scale_correction_metadata(), None
     try:
-        results = segmenter.predict(generated_image, imgsz=RESOLUTION, conf=CONTEXT_PERSON_MIN_CONFIDENCE, verbose=False)
+        results = segmenter.predict(generated_image, imgsz=RESOLUTION, conf=CONTEXT_PERSON_MIN_CONFIDENCE, device=device, verbose=False)
     except Exception as exc:
         print("Person segmentation failed; retrying if possible.")
         print(type(exc).__name__, exc)

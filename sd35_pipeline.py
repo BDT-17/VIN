@@ -482,14 +482,12 @@ def neutralize_person_edge_halo(source_crop, person_rgb, person_mask):
     if not EDGE_HALO_NEUTRALIZE:
         return person_rgb
     mask_l = person_mask.convert("L")
-    mask_arr = np.asarray(mask_l, dtype=np.float32) / 255.0
     hard = mask_l.point(lambda p: 255 if p >= PERSON_PASTE_HARD_THRESHOLD else 0)
     hard_arr = np.asarray(hard, dtype=np.float32) / 255.0
     filter_size = max(3, int(EDGE_HALO_WIDTH) * 2 + 1)
     dilated = np.asarray(hard.filter(ImageFilter.MaxFilter(filter_size)), dtype=np.float32) / 255.0
     outside_ring = np.clip(dilated - hard_arr, 0.0, 1.0)
-    soft_edge = ((mask_arr >= EDGE_HALO_MIN_ALPHA) & (hard_arr <= 0.0)).astype(np.float32)
-    edge_alpha = np.clip(np.maximum(outside_ring, soft_edge) * EDGE_HALO_COLOR_MATCH_STRENGTH, 0.0, 1.0)
+    edge_alpha = np.clip(outside_ring * EDGE_HALO_COLOR_MATCH_STRENGTH, 0.0, 1.0)
     edge_active = edge_alpha > 0.02
     if not np.any(edge_active):
         return person_rgb
@@ -512,15 +510,13 @@ def neutralize_person_edge_halo(source_crop, person_rgb, person_mask):
 
 def tight_person_edge_alpha(person_mask):
     mask_l = person_mask.convert("L")
-    mask_arr = np.asarray(mask_l, dtype=np.float32) / 255.0
     hard = mask_l.point(lambda p: 255 if p >= PERSON_PASTE_HARD_THRESHOLD else 0)
     filter_size = max(3, int(EDGE_HALO_WIDTH) * 2 + 1)
     dilated = np.asarray(hard.filter(ImageFilter.MaxFilter(filter_size)), dtype=np.float32) / 255.0
     hard_arr = np.asarray(hard, dtype=np.float32) / 255.0
 
     outside_ring = np.clip(dilated - hard_arr, 0.0, 1.0)
-    soft_transition = ((mask_arr >= EDGE_HALO_MIN_ALPHA) & (mask_arr < PERSON_PASTE_HARD_THRESHOLD / 255.0)).astype(np.float32)
-    edge = np.maximum(outside_ring, soft_transition) * (1.0 - hard_arr)
+    edge = outside_ring * (1.0 - hard_arr)
     return np.clip(edge * EDGE_HALO_COLOR_MATCH_STRENGTH, 0.0, 1.0)
 
 
@@ -917,6 +913,7 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
             variant=variant,
             background_image=crop_source,
             depth_map=depth_map,
+            device=device,
         )
         reject_reason = normalize_reject_reason(reject_reason)
         scale_meta = dict(scale_meta or {})

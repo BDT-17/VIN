@@ -142,7 +142,7 @@ def _apply_edge_blur(result_arr, blurred_arr, edge_alpha):
     if blur_radius <= 0:
         return result_arr
     alpha = np.asarray(edge_alpha.convert("L"), dtype=np.float32) / 255.0
-    alpha = np.expand_dims(np.clip(alpha * 0.42, 0.0, 0.42), axis=2)
+    alpha = np.expand_dims(np.clip(alpha * 0.12, 0.0, 0.12), axis=2)
     return result_arr * (1.0 - alpha) + blurred_arr * alpha
 
 
@@ -150,7 +150,9 @@ def _apply_boundary_color_match(source_arr, result_arr, masks):
     strength = edge_color_strength()
     if strength <= 0:
         return result_arr
-    inner_active = _mask_active(masks["inner_boundary"], threshold=8)
+    # Only touch the outside boundary. Recoloring the inner boundary makes the
+    # generated person lose detail and visually sink into the background.
+    inner_active = _mask_active(masks["outer_boundary"], threshold=8)
     outer_active = _mask_active(masks["outer_boundary"], threshold=8)
     bg_mean, bg_std = _rgb_stats(source_arr, outer_active)
     edge_mean, edge_std = _rgb_stats(result_arr, inner_active)
@@ -158,14 +160,14 @@ def _apply_boundary_color_match(source_arr, result_arr, masks):
         return result_arr
     corrected = (result_arr - edge_mean.reshape(1, 1, 3)) * (bg_std / edge_std).reshape(1, 1, 3) + bg_mean.reshape(1, 1, 3)
     corrected = np.clip(corrected, 0, 255)
-    alpha = np.asarray(masks["inner_boundary"].filter(ImageFilter.GaussianBlur(radius=masks["feather"])), dtype=np.float32) / 255.0
+    alpha = np.asarray(masks["outer_boundary"].filter(ImageFilter.GaussianBlur(radius=masks["feather"])), dtype=np.float32) / 255.0
     alpha = np.expand_dims(np.clip(alpha * strength, 0.0, strength), axis=2)
     return result_arr * (1.0 - alpha) + corrected * alpha
 
 
 def _apply_outer_source_cleanup(source_arr, result_arr, masks):
     outer_alpha = np.asarray(masks["outer_boundary"].filter(ImageFilter.GaussianBlur(radius=masks["feather"])), dtype=np.float32) / 255.0
-    outer_alpha = np.expand_dims(np.clip(outer_alpha * 0.18, 0.0, 0.18), axis=2)
+    outer_alpha = np.expand_dims(np.clip(outer_alpha * 0.10, 0.0, 0.10), axis=2)
     return result_arr * (1.0 - outer_alpha) + source_arr * outer_alpha
 
 
