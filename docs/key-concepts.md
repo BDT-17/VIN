@@ -1,129 +1,140 @@
 # Key Concepts
 
-This project builds a research pipeline for pedestrian augmentation on CityPersons-style street scenes. The working source of truth is:
+This project studies a general data augmentation task:
 
 ```text
-sd3.5-agumentation-scale-correction-clean.ipynb
+add target object(s) to existing images while preserving the original background
 ```
+
+The current implementation uses CityPersons pedestrian insertion as the reference experiment. Pedestrians are a hard and useful test case, but they are not the conceptual boundary of the project.
 
 ## 1. Background-Preserving Augmentation
 
-The original image is treated as the trusted scene. SD3.5 is allowed to generate candidate pedestrians, but the generated background is not trusted.
+The original image is treated as the trusted scene. The diffusion model may generate candidate objects, but its generated background is not trusted.
 
 The pipeline therefore:
 
-1. generates a candidate image;
-2. detects and segments generated pedestrians;
-3. extracts only pedestrian pixels;
-4. pastes them back onto the original frame.
+1. generates a candidate image or context crop;
+2. detects and segments the newly generated target object;
+3. extracts only target-object pixels;
+4. pastes those pixels back onto the original frame;
+5. validates that the output changed only where the new object should appear.
 
-This keeps buildings, roads, signs, vehicles, and scene layout closer to the source data distribution.
+This keeps roads, buildings, shelves, tables, signs, vehicles, vegetation, or any other original scene context closer to the source data distribution.
 
-## 2. Context-Person Composite
+## 2. Context-Object Composite
 
-The core architecture is **Context-Person Composite**.
+The core architecture is **Context-Object Composite**.
 
-Instead of asking the diffusion model to solve the whole augmentation problem, the notebook separates the task into explicit stages:
+Instead of asking the diffusion model to both create the object and preserve every background pixel, the pipeline separates the task into explicit stages:
 
 ```text
 placement -> generation -> segmentation -> scale correction -> compositing -> validation -> retry
 ```
 
-This makes the pipeline easier to debug because each failure can be assigned to a concrete reason such as bad scale, no person detected, low confidence, poor edge quality, or invalid overlap.
+In the current code this mode is still named `context_person_composite`, because the first benchmark is pedestrian insertion. The design generalizes to other object classes when the detector, prompt set, placement policy, and validation rules are swapped.
 
-## 3. Foot-Anchored Scale Correction
+## 3. Object-Aware Scale Correction
 
-Generated pedestrians often have plausible appearance but wrong physical scale. The notebook corrects this after generation.
+Generated objects often look plausible but have the wrong physical scale. The pipeline corrects this after generation when a usable object mask exists.
 
-The important idea is:
+For pedestrians, the implementation estimates expected height from depth/ground position, resizes the crop, keeps the feet anchored, and rejects objects that are implausibly tall, short, floating, or cropped.
 
-- estimate the expected person height from ground/foot position;
-- resize the detected pedestrian crop;
-- keep the foot point anchored during resize;
-- validate that the final person is not floating or implausibly tall/short.
+For other object categories, the same concept should be adapted:
 
-This is especially important for CityPersons because pedestrian height strongly depends on perspective depth.
+- estimate expected size from perspective, depth, known reference objects, or domain priors;
+- anchor the object to the right physical contact point, such as feet, wheels, base, shadow, or table contact;
+- resize the segmented object and mask together;
+- reject outputs outside the plausible size envelope.
 
-## 4. Occlusion-Aware Placement
+## 4. Placement Policy
 
-Street scenes frequently contain foreground vehicles, poles, signs, and other pedestrians. A new person should not simply be pasted on top of everything.
+Object insertion needs a placement policy, not just a prompt.
 
-The clean notebook includes occlusion-aware logic:
+The current pedestrian implementation chooses candidate boxes using road/sidewalk priors, existing person/vehicle boxes, semantic masks, depth ordering, and overlap checks.
 
-- foreground occluder masks can remove hidden parts of the generated person;
-- vehicle/person overlap is checked before acceptance;
-- person-person overlap is allowed only when the occluded person is smaller and plausibly behind;
-- invalid depth ordering is rejected as `bad_person_depth_overlap`.
+For another dataset, placement should encode domain-specific validity:
 
-This is a key difference between a visual demo and a detection-dataset augmentation pipeline.
+- cars belong on roads or parking areas;
+- products belong on shelves, tables, or hands;
+- traffic signs belong near poles or roadside regions;
+- animals need plausible ground contact and occlusion;
+- medical or industrial objects may need strict anatomical or mechanical constraints.
 
-## 5. Edge And Appearance Integration
+Bad placement can corrupt a training dataset even when the inserted object looks visually realistic.
+
+## 5. Occlusion-Aware Compositing
+
+The inserted object should respect foreground objects in the original image.
+
+The current pipeline can build occluder masks from existing persons and vehicles, then remove hidden regions from the new object before final paste. The general rule is:
+
+```text
+new object should not blindly cover trusted foreground evidence
+```
+
+For a new domain, foreground classes and depth rules need to be redefined.
+
+## 6. Edge And Appearance Integration
 
 The project uses multiple compositing steps to reduce pasted-looking artifacts:
 
 - mask cleanup;
+- generated-background fringe trimming;
 - edge feathering;
-- color harmonization;
-- local brightness matching;
-- edge halo color matching from background pixels within a tight local band around the inserted person;
-- horizontal-row mean matching inside the local paste context, not across the whole image;
-- light mask-fringe trimming before paste to remove generated-background pixels;
-- shadow synthesis;
+- local color transfer;
+- brightness and contrast matching;
+- saturation matching;
+- texture/noise matching;
+- local boundary color matching;
+- optional contact shadow;
 - alpha paste as the current default;
-- optional `seamlessClone` support remains in the notebook, but it is disabled by default because it can create halo artifacts.
+- optional seamless clone support, disabled by default because it can create halo artifacts.
 
-The goal is not perfect image editing. The goal is to produce training images where the added pedestrian is realistic enough and does not corrupt the original annotation context. The current notebook prioritizes reducing visible edge mismatch over preserving every generated boundary pixel.
+The goal is not perfect photo editing. The goal is to produce training images where the added object is realistic enough and does not corrupt the original annotation context.
 
-## 6. YOLO-Guided Validation
+## 7. Detector-Guided Validation
 
-YOLOv8m-seg is used as a practical validator and extractor.
+A detector/segmenter is used as both extractor and validator.
 
-It supports:
+In the reference implementation, YOLOv8m-seg extracts pedestrian masks and checks confidence, count, geometry, mask area, and final composite quality.
 
-- person mask extraction;
-- confidence filtering;
-- expected person count checks;
-- final augmented image validation;
-- rejection reason logging;
-- manifest metadata.
+For a new object class, replace this with the best available validator:
+
+- class-specific detector;
+- segmentation model;
+- open-vocabulary detector;
+- domain classifier;
+- geometric rules;
+- downstream task metrics.
 
 The pipeline does not assume every generated image is useful. It rejects weak samples and retries under a controlled budget.
 
-Current mask-related defaults:
-
-```python
-CONTEXT_PERSON_MASK_THRESHOLD = 0.40
-PERSON_MASK_TRIM_FRINGE_PIXELS = 1
-PERSON_MASK_DILATE_FOR_ACCESSORIES = 2
-ACCESSORY_KEEP_COMPONENTS = 12
-ACCESSORY_MIN_COMPONENT_AREA_RATIO = 0.002
-USE_SEAMLESS_CLONE = False
-SMOKE_IMAGES = 10
-```
-
-## 7. Quality Score
+## 8. Quality Score
 
 The clean notebook computes a compact quality score:
 
 ```python
 quality_score = (
-    0.45 * person_score
+    0.45 * object_score
     + 0.25 * scale_score
     + 0.20 * background_score
     + 0.10 * edge_score
 )
 ```
 
+In the current code, `object_score` is named `person_score`.
+
 The component scores reflect:
 
-- **person_score**: confidence and detectability of the inserted pedestrian;
-- **scale_score**: perspective-aware size plausibility;
+- **object_score**: confidence and detectability of the inserted object;
+- **scale_score**: size plausibility;
 - **background_score**: preservation of the original scene;
 - **edge_score**: visual integration around the pasted mask.
 
 This score is used for analysis and autotune guidance, not as a claim of absolute image quality.
 
-## 8. Quality-Guided Autotune
+## 9. Quality-Guided Autotune
 
 Autotune reduces manual parameter tuning but is intentionally conservative.
 
@@ -143,7 +154,7 @@ The intended workflow is:
 3. review the autotune report;
 4. decide whether to apply the recommended runtime changes.
 
-## 9. Multi-GPU Execution
+## 10. Multi-GPU Execution
 
 The notebook can shard augmentation jobs across available CUDA devices.
 
@@ -155,7 +166,7 @@ When `USE_ALL_GPUS_FOR_AUGMENTATION=True`, the device resolver returns all visib
 
 If only one GPU exists, it behaves like a normal single-GPU run. If CUDA is unavailable, it falls back to CPU.
 
-## 10. Reproducibility Principle
+## 11. Reproducibility Principle
 
 Autotune is useful for exploration, but it can reduce reproducibility if changes are applied silently.
 
@@ -168,27 +179,32 @@ For research runs:
 
 This keeps experiment reports traceable.
 
-## 11. Current Limitations
+## 12. Current Limitations
 
-The notebook is still large because it keeps the full research pipeline inside one file.
+The codebase still contains pedestrian-specific names because CityPersons is the active reference experiment.
 
 Known limitations:
 
-- some visual quality issues still need manual inspection;
-- YOLO-based validation is practical but not a perfect human-quality metric;
+- new object classes require detector, prompt, placement, and validation changes;
+- visual quality still needs manual inspection;
+- detector-based validation is practical but not a perfect human-quality metric;
 - smoke tests can be noisy and should not be over-trusted;
 - threshold tuning should be based on enough samples and saved snapshots;
-- the notebook is suitable for experimentation but may later benefit from moving helper code into a small Python module.
+- the notebook is suitable for experimentation but should be modularized further for a general object-insertion toolkit.
 
-## 12. Research Focus
+## 13. Research Focus
 
-The current research focus is not changing the base model. The main work is improving:
+The current research focus is improving the pipeline architecture rather than changing the base model.
 
-- placement policy;
-- perspective scale;
-- foot grounding;
+Main work areas:
+
+- target-object placement policy;
+- perspective and object scale;
+- object grounding/contact;
 - occlusion ordering;
+- mask quality;
 - blending and harmonization;
-- retry policy;
+- detector-guided retry policy;
 - quality metrics;
-- reproducible parameter tuning.
+- reproducible parameter tuning;
+- adapting the pipeline beyond the pedestrian/CityPersons reference case.

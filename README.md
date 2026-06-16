@@ -1,17 +1,34 @@
-# CityPersons Pedestrian Augmentation With SD3.5
+# Background-Preserving Object Insertion Augmentation
 
-Research baseline for CityPersons pedestrian augmentation using **Stable Diffusion 3.5 Medium** and **YOLOv8m-seg**.
+Research baseline for building a data augmentation pipeline that **adds new objects to existing images while preserving the original background**.
 
-Current pipeline: **V5 context-person-composite with img2img**.
+The current implementation uses **Stable Diffusion 3.5 Medium** for candidate generation and **YOLOv8m-seg** for object extraction/validation. CityPersons pedestrian insertion is the reference experiment in this repository, but the target task is broader than CityPersons:
+
+```text
+given an image dataset
+-> choose a target object class and insertion policy
+-> generate candidate object(s) in local scene context
+-> segment only the newly generated object pixels
+-> correct scale, placement, and occlusion
+-> paste the object back onto the original image
+-> validate, retry, and log metadata
+```
+
+The central design rule is simple: **the source image is the trusted background; generated background pixels are not trusted**.
+
+## Current Reference Pipeline
+
+The active implementation is **V5 context-object-composite**. In the current code and notebooks this is still named `context_person_composite` because the reference class is pedestrian.
 
 ```text
 Dataset scanner
--> Context crop img2img generation
--> YOLO person segmentation
--> Scale correction
+-> Object placement proposal
+-> Context img2img generation
+-> Target-object segmentation
+-> Perspective / scale correction
 -> Edge / color / brightness / shadow blending
--> Person-only alpha composite
--> YOLO validation + retry
+-> Object-only alpha composite
+-> Detector validation + retry
 -> Image outputs + manifest
 ```
 
@@ -19,13 +36,34 @@ Dataset scanner
 
 - `sd35_run.ipynb`: short Kaggle runner. It clones/pulls this GitHub repo and imports the modules from the cloned repo.
 - `sd3.5-agumentation-scale-correction-clean.ipynb`: self-contained Kaggle notebook. It writes the Python modules to `/kaggle/working` with `%%writefile`, then imports and runs them.
-- `sd35_config.py`: configuration.
+- `sd35_config.py`: configuration, presets, generation parameters, placement thresholds, validation thresholds.
 - `sd35_data.py`: dataset scan and preview.
 - `sd35_utils.py`: preprocessing, placement, masks, scale/depth helpers.
 - `sd35_model.py`: SD3.5 pipeline loading.
-- `sd35_evaluation.py`: YOLO-seg, validation, retry policy.
-- `sd35_pipeline.py`: generation, paste, edge correction, compositing.
+- `sd35_evaluation.py`: detector/segmenter validation and retry policy.
+- `sd35_pipeline.py`: generation, object paste, edge correction, compositing.
+- `sd35_edge_harmonization.py`: boundary-only edge harmonization.
 - `sd35_runner.py`: job building, augmentation runner, manifest, autotune, export.
+
+## Scope
+
+This repo is not only about CityPersons. CityPersons is the first concrete benchmark because pedestrians expose many hard cases:
+
+- strong perspective scale changes;
+- foot grounding;
+- foreground occlusion;
+- small and distant instances;
+- downstream detector sensitivity;
+- strict background preservation requirements.
+
+To adapt the pipeline to another dataset or object class, the key parts to swap are:
+
+- dataset scanner and label loader;
+- object prompts and variant definitions;
+- detector/segmenter for the target object class;
+- scale policy for the target object geometry;
+- placement constraints for valid object locations;
+- validation criteria and manifest fields.
 
 ## Run On Kaggle
 
@@ -65,8 +103,6 @@ from sd35_pipeline import *
 from sd35_runner import *
 ```
 
-You do **not** need to upload or copy `sd35_*.py` manually when using this workflow.
-
 Run the notebook cells in order:
 
 ```text
@@ -96,7 +132,14 @@ Use `sd3.5-agumentation-scale-correction-clean.ipynb` if you want to upload a si
 
 ## Dataset
 
-The dataset is not stored in this repo. Add the CityPersons Kaggle dataset as notebook input. The config searches common Kaggle paths under `/kaggle/input`.
+The dataset is not stored in this repo.
+
+The current config searches common CityPersons Kaggle paths under `/kaggle/input`, but this is a reference setup rather than a hard project boundary. For another dataset, update:
+
+- `DATASET_ROOT_CANDIDATES`
+- `DATASET_SPLIT_DIRS`
+- label parsing helpers in `sd35_data.py` / `sd35_utils.py`
+- target object class IDs and validation thresholds
 
 ## Important Configuration
 
@@ -106,39 +149,34 @@ Edit `sd35_config.py` for clone-based runs, or edit the `%%writefile /kaggle/wor
 RUN_PRESET = "batch"  # smoke | quality | batch
 PARAMETER_OVERRIDES = {}
 USE_ALL_GPUS_FOR_AUGMENTATION = True
+BACKGROUND_PRESERVATION_MODE = "context_person_composite"
 CONTEXT_PERSON_GENERATION_PIPELINE = "img2img"
 ```
 
-Smoke run defaults:
-
-```python
-SMOKE_IMAGES = 10
-SMOKE_SPLITS = ["train"]
-```
+The naming is still pedestrian-specific in code, but the architecture is object-insertion oriented.
 
 Main defaults:
 
-- `BACKGROUND_PRESERVATION_MODE = "context_person_composite"`
-- `CONTEXT_PERSON_GENERATION_PIPELINE = "img2img"`
 - `RESOLUTION = 512`
 - `USE_T5 = False`
 - `USE_SEAMLESS_CLONE = False`
 - `CONTEXT_PERSON_MASK_THRESHOLD = 0.40`
 - `PERSON_MASK_TRIM_FRINGE_PIXELS = 1`
+- `EDGE_HARMONIZATION_ENABLED = True`
 
 ## Edge Handling
 
-The pipeline applies edge correction **after** the person has been pasted:
+The pipeline applies edge correction after the object has been pasted:
 
 ```text
-paste person
+paste segmented object
 -> crop pasted result
--> horizontal-row background mean around person
--> blur/mean edge correction
+-> estimate local background tone around object boundary
+-> blur / color / brightness correction on the boundary band
 -> paste corrected crop back
 ```
 
-Current edge correction uses **horizontal mean only**. It does not blend local mean.
+The goal is to reduce visible pasted-object artifacts without letting background pixels overwrite the inserted object core.
 
 ## GPU Memory
 
@@ -163,4 +201,4 @@ The run can produce:
 
 ## Status
 
-This is a research baseline focused on scale correction, grounding, occlusion ordering, blending, validation, and autotune. It is not a production augmentation service.
+This is a research baseline for **background-preserving object insertion augmentation**. It is not a production augmentation service. The current implementation is strongest for pedestrians because that is the reference class, but the intended abstraction is a general object insertion pipeline.
