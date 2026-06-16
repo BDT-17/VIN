@@ -64,6 +64,8 @@ try:
         ADDIT_SOURCE_PROMPT,
         ADDIT_STRUCTURE_STRENGTH,
         ADDIT_TARGET_PROMPTS,
+        ADDIT_TRANSFORMER_DEVICE,
+        ADDIT_USE_TWO_GPUS,
         ADDIT_VARIANT_OVERRIDES,
         ADDIT_W_SELF_END,
         ADDIT_W_SELF_START,
@@ -122,6 +124,8 @@ except ImportError:
         ADDIT_SOURCE_PROMPT,
         ADDIT_STRUCTURE_STRENGTH,
         ADDIT_TARGET_PROMPTS,
+        ADDIT_TRANSFORMER_DEVICE,
+        ADDIT_USE_TWO_GPUS,
         ADDIT_VARIANT_OVERRIDES,
         ADDIT_W_SELF_END,
         ADDIT_W_SELF_START,
@@ -317,7 +321,17 @@ class AddItCityPersonsPipeline:
 
         Returns the generated image as a PIL Image.
         """
-        device = torch.device(device)
+        base_device = torch.device(device)
+        generation_device = base_device
+        if (
+            ADDIT_USE_TWO_GPUS
+            and torch.cuda.is_available()
+            and torch.cuda.device_count() >= 2
+            and str(base_device).startswith("cuda")
+        ):
+            generation_device = torch.device(ADDIT_TRANSFORMER_DEVICE)
+
+        device = generation_device
         vae_device = self.vae_device
         dtype = self.dtype
         resolution = RESOLUTION
@@ -371,6 +385,15 @@ class AddItCityPersonsPipeline:
 
         # ── 5. Optional Add-it attention processors ──
         attention_enabled = bool(ADDIT_WEIGHTED_EXTENDED_ATTENTION)
+        original_transformer_device = _module_device(self.transformer, fallback=str(base_device))
+        moved_transformer_for_generation = original_transformer_device != generation_device
+        if moved_transformer_for_generation:
+            self.transformer.to(generation_device)
+            self.transformer_device = generation_device
+            self.device = generation_device
+            if str(original_transformer_device).startswith("cuda"):
+                torch.cuda.empty_cache()
+
         if attention_enabled:
             self._original_processors = inject_addit_processors(self.transformer, self.state)
             self.state.enabled = True
@@ -452,6 +475,12 @@ class AddItCityPersonsPipeline:
             if self._original_processors is not None:
                 restore_processors(self.transformer, self._original_processors)
                 self._original_processors = None
+            if moved_transformer_for_generation:
+                self.transformer.to(original_transformer_device)
+                self.transformer_device = original_transformer_device
+                self.device = original_transformer_device
+                if str(generation_device).startswith("cuda"):
+                    torch.cuda.empty_cache()
 
         # ── 7. Decode ──
         result_image = decode_latent_to_image(self.vae, latent.to(vae_device))
