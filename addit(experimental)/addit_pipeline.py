@@ -426,7 +426,7 @@ class AddItCityPersonsPipeline:
 
         # ── 7. Decode ──
         result_image = decode_latent_to_image(self.vae, latent)
-        if ADDIT_FINAL_PIXEL_COMPOSITE:
+        if ADDIT_FINAL_PIXEL_COMPOSITE and not ADDIT_FINAL_PERSON_CUTOUT:
             result_image = composite_generated_region(
                 source_image=source_image,
                 generated_image=result_image,
@@ -473,21 +473,19 @@ class AddItCityPersonsPipeline:
         width, height = generated_image.size
         mask_np = np.zeros((height, width), dtype=np.uint8)
 
-        if det.masks is not None and det.masks.data is not None:
-            masks = det.masks.data.cpu().numpy()
-            for idx in selected_indices:
-                person_mask = (masks[idx] > 0.5).astype(np.uint8) * 255
-                person_mask_img = Image.fromarray(person_mask, mode="L").resize(
-                    (width, height), Image.Resampling.BILINEAR
-                )
-                mask_np = np.maximum(mask_np, np.array(person_mask_img, dtype=np.uint8))
-        else:
-            draw_mask = Image.new("L", (width, height), 0)
-            draw = ImageDraw.Draw(draw_mask)
-            for idx in selected_indices:
-                x1, y1, x2, y2 = boxes[idx]
-                draw.rectangle((x1, y1, x2, y2), fill=255)
-            mask_np = np.array(draw_mask, dtype=np.uint8)
+        if det.masks is None or det.masks.data is None:
+            return None
+
+        masks = det.masks.data.cpu().numpy()
+        for idx in selected_indices:
+            person_mask = (masks[idx] > 0.5).astype(np.uint8) * 255
+            person_mask_img = Image.fromarray(person_mask, mode="L").resize(
+                (width, height), Image.Resampling.BILINEAR
+            )
+            mask_np = np.maximum(mask_np, np.array(person_mask_img, dtype=np.uint8))
+
+        if not np.any(mask_np):
+            return None
 
         mask = Image.fromarray(mask_np, mode="L")
         if ADDIT_PERSON_CUTOUT_DILATE_PX > 0:
@@ -525,7 +523,7 @@ class AddItCityPersonsPipeline:
                 mode=ADDIT_FINAL_COMPOSITE_MODE,
             )
 
-        return generated
+        return source
 
     def _native_img2img_fallback(
         self,
