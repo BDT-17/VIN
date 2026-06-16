@@ -939,7 +939,7 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
                 continue
             break
 
-        target_window = expand_bbox_for_detection(planned_insert_bbox, source.size, factor=1.45)
+        target_window = expand_bbox_for_detection(planned_insert_bbox, source.size, factor=2.20)
         det_area = max(1, bbox_area(detected_bbox))
         target_overlap = bbox_intersection_area(detected_bbox, target_window) / det_area
         planned_cx = (planned_insert_bbox[0] + planned_insert_bbox[2]) / 2.0
@@ -947,7 +947,7 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
         det_cx = (detected_bbox[0] + detected_bbox[2]) / 2.0
         det_cy = (detected_bbox[1] + detected_bbox[3]) / 2.0
         center_distance = math.hypot(det_cx - planned_cx, det_cy - planned_cy) / max(1, source.size[0])
-        if target_overlap < 0.20 and center_distance > 0.18:
+        if target_overlap < 0.05 and center_distance > 0.28 and attempt < max_retries:
             reject_reason = "bad_placement"
             scale_unrecoverable_streak = 0
             scale_meta.update({
