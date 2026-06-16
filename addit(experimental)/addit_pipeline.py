@@ -586,18 +586,35 @@ class AddItCityPersonsPipeline:
         Kaggle smoke tests productive when a diffusers internals mismatch makes
         the custom denoising loop fail.
         """
-        generator_device = device if str(device).startswith("cuda") else "cpu"
-        generator = torch.Generator(device=generator_device).manual_seed(seed)
-        result = self.pipe(
-            prompt=target_prompt,
-            negative_prompt=negative_prompt,
-            image=source_image,
-            strength=strength,
-            guidance_scale=guidance_scale,
-            num_inference_steps=num_inference_steps,
-            generator=generator,
+        fallback_device = self.vae_device
+        original_transformer_device = _module_device(
+            self.transformer, fallback=str(fallback_device)
         )
-        return result.images[0].resize(source_image.size)
+        moved_transformer = original_transformer_device != fallback_device
+
+        if moved_transformer:
+            self.transformer.to(fallback_device)
+            if str(original_transformer_device).startswith("cuda"):
+                torch.cuda.empty_cache()
+
+        try:
+            generator_device = fallback_device if str(fallback_device).startswith("cuda") else "cpu"
+            generator = torch.Generator(device=generator_device).manual_seed(seed)
+            result = self.pipe(
+                prompt=target_prompt,
+                negative_prompt=negative_prompt,
+                image=source_image,
+                strength=strength,
+                guidance_scale=guidance_scale,
+                num_inference_steps=num_inference_steps,
+                generator=generator,
+            )
+            return result.images[0].resize(source_image.size)
+        finally:
+            if moved_transformer:
+                self.transformer.to(original_transformer_device)
+                if str(fallback_device).startswith("cuda"):
+                    torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------
     # Single-image entry point
