@@ -53,8 +53,11 @@ try:
         ADDIT_OUTPUT_DIR,
         ADDIT_PERSON_CUTOUT_CONF,
         ADDIT_PERSON_CUTOUT_DILATE_PX,
+        ADDIT_PERSON_CUTOUT_EDGE_FULL_ALPHA,
+        ADDIT_PERSON_CUTOUT_EDGE_MIN_ALPHA,
         ADDIT_PERSON_CUTOUT_FALLBACK_TO_BBOX,
         ADDIT_PERSON_CUTOUT_FEATHER_PX,
+        ADDIT_PERSON_CUTOUT_MASK_THRESHOLD,
         ADDIT_RETRY_SEED_STEP,
         ADDIT_SAVE_DEBUG,
         ADDIT_SEED,
@@ -108,8 +111,11 @@ except ImportError:
         ADDIT_OUTPUT_DIR,
         ADDIT_PERSON_CUTOUT_CONF,
         ADDIT_PERSON_CUTOUT_DILATE_PX,
+        ADDIT_PERSON_CUTOUT_EDGE_FULL_ALPHA,
+        ADDIT_PERSON_CUTOUT_EDGE_MIN_ALPHA,
         ADDIT_PERSON_CUTOUT_FALLBACK_TO_BBOX,
         ADDIT_PERSON_CUTOUT_FEATHER_PX,
+        ADDIT_PERSON_CUTOUT_MASK_THRESHOLD,
         ADDIT_RETRY_SEED_STEP,
         ADDIT_SAVE_DEBUG,
         ADDIT_SEED,
@@ -153,6 +159,14 @@ from sd35_data import ImageRecord
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 
+def _module_device(module, fallback: str = "cpu") -> torch.device:
+    """Return the device of the first module parameter, or fallback."""
+    try:
+        return next(module.parameters()).device
+    except (AttributeError, StopIteration):
+        return torch.device(fallback)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Result container
 # ═══════════════════════════════════════════════════════════════════════════
@@ -194,7 +208,15 @@ class AddItCityPersonsPipeline:
         self.scheduler = sd35_pipe.scheduler
         first_param = next(sd35_pipe.transformer.parameters())
         self.param_device = first_param.device
-        self.device = torch.device(device or getattr(sd35_pipe, "_execution_device", None) or TRAIN_DEVICE)
+        self.transformer_device = torch.device(device or self.param_device)
+        self.vae_device = _module_device(self.vae, fallback=str(self.transformer_device))
+        prompt_module = (
+            getattr(sd35_pipe, "text_encoder", None)
+            or getattr(sd35_pipe, "text_encoder_2", None)
+            or getattr(sd35_pipe, "text_encoder_3", None)
+        )
+        self.prompt_device = _module_device(prompt_module, fallback=str(self.transformer_device))
+        self.device = self.transformer_device
         self.dtype = first_param.dtype
 
         # Attention state & original processors
@@ -233,6 +255,7 @@ class AddItCityPersonsPipeline:
     # ------------------------------------------------------------------
     def _encode_prompt(self, prompt: str, negative_prompt: str, device):
         """Encode text prompts into SD3.5 embeddings."""
+        prompt_device = self.prompt_device
         result = self.pipe.encode_prompt(
             prompt=prompt,
             prompt_2=prompt,
@@ -240,10 +263,13 @@ class AddItCityPersonsPipeline:
             negative_prompt=negative_prompt,
             negative_prompt_2=negative_prompt,
             negative_prompt_3=negative_prompt if hasattr(self.pipe, "tokenizer_3") and self.pipe.tokenizer_3 is not None else None,
-            device=device,
+            device=prompt_device,
         )
         # result is (prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds)
-        return result
+        return tuple(
+            item.to(device=device) if torch.is_tensor(item) else item
+            for item in result
+        )
 
     # ------------------------------------------------------------------
     # Source forward pass for K,V caching
@@ -291,6 +317,8 @@ class AddItCityPersonsPipeline:
 
         Returns the generated image as a PIL Image.
         """
+        device = torch.device(device)
+        vae_device = self.vae_device
         dtype = self.dtype
         resolution = RESOLUTION
         generator = torch.Generator(device=device if str(device).startswith("cuda") else "cpu")
@@ -298,8 +326,8 @@ class AddItCityPersonsPipeline:
 
         # ── 1. Encode source ──
         source_latent = encode_image_to_latent(
-            self.vae, source_image, resolution, device, dtype
-        )
+            self.vae, source_image, resolution, vae_device, dtype
+        ).to(device=device, dtype=dtype)
         latent_h, latent_w = source_latent.shape[2], source_latent.shape[3]
 
         # ── 2. Create insertion mask in latent space ──
@@ -324,10 +352,11 @@ class AddItCityPersonsPipeline:
             resolution=resolution,
             device=device,
             dtype=dtype,
+            source_latent=source_latent,
         )
 
         if len(timesteps) == 0:
-            return decode_latent_to_image(self.vae, source_latent)
+            return decode_latent_to_image(self.vae, source_latent.to(vae_device))
 
         # ── 4. Encode prompts ──
         source_embeds = self._encode_prompt(ADDIT_SOURCE_PROMPT, negative_prompt, device)
@@ -425,7 +454,7 @@ class AddItCityPersonsPipeline:
                 self._original_processors = None
 
         # ── 7. Decode ──
-        result_image = decode_latent_to_image(self.vae, latent)
+        result_image = decode_latent_to_image(self.vae, latent.to(vae_device))
         if ADDIT_FINAL_PIXEL_COMPOSITE and not ADDIT_FINAL_PERSON_CUTOUT:
             result_image = composite_generated_region(
                 source_image=source_image,
@@ -487,12 +516,27 @@ class AddItCityPersonsPipeline:
         if not np.any(mask_np):
             return None
 
+        mask_np = np.where(
+            mask_np >= int(ADDIT_PERSON_CUTOUT_MASK_THRESHOLD),
+            255,
+            0,
+        ).astype(np.uint8)
         mask = Image.fromarray(mask_np, mode="L")
         if ADDIT_PERSON_CUTOUT_DILATE_PX > 0:
             size = 1 + 2 * int(ADDIT_PERSON_CUTOUT_DILATE_PX)
             mask = mask.filter(ImageFilter.MaxFilter(size=size))
         if ADDIT_PERSON_CUTOUT_FEATHER_PX > 0:
             mask = mask.filter(ImageFilter.GaussianBlur(radius=ADDIT_PERSON_CUTOUT_FEATHER_PX))
+            min_alpha = int(ADDIT_PERSON_CUTOUT_EDGE_MIN_ALPHA)
+            full_alpha = max(min_alpha + 1, int(ADDIT_PERSON_CUTOUT_EDGE_FULL_ALPHA))
+            scale = 255.0 / (full_alpha - min_alpha)
+            mask = mask.point(
+                lambda value: 0
+                if value <= min_alpha
+                else 255
+                if value >= full_alpha
+                else int((value - min_alpha) * scale)
+            )
         return mask
 
     def _paste_generated_person_on_source(

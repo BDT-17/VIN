@@ -387,6 +387,7 @@ def transfer_noise_structure(
     resolution: int,
     device,
     dtype,
+    source_latent: Optional[torch.Tensor] = None,
 ):
     """Implement Noise Structure Transfer.
 
@@ -405,7 +406,10 @@ def transfer_noise_structure(
     -------
     initial_latent, source_latent, noise, timesteps
     """
-    source_latent = encode_image_to_latent(vae, source_image, resolution, device, dtype)
+    if source_latent is None:
+        source_latent = encode_image_to_latent(vae, source_image, resolution, device, dtype)
+    else:
+        source_latent = source_latent.to(device=device, dtype=dtype)
 
     # Set up scheduler timesteps
     scheduler.set_timesteps(num_inference_steps, device=device)
