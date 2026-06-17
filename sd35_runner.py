@@ -218,13 +218,23 @@ def run_augmentation_jobs_on_device(device, jobs, total_jobs, backend):
 
 
 def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKEND, target_per_bucket=AUGMENTATIONS_PER_BUCKET, target_splits=TARGET_SPLITS, write_manifest_file=True, return_manifest_rows=False):
+    global LAST_MANIFEST_ROWS, LAST_REJECT_HISTOGRAM, LAST_AUGMENTATION_SUMMARY
     if not records:
         raise FileNotFoundError("No images found. Mount dataset folder and rerun scan_dataset().")
     devices = resolve_augmentation_devices()
     jobs = build_augmentation_jobs(records, variants, target_per_bucket, target_splits)
     if not jobs:
         print("No augmentation jobs were queued.")
-        return []
+        LAST_MANIFEST_ROWS = []
+        LAST_REJECT_HISTOGRAM = {}
+        LAST_AUGMENTATION_SUMMARY = {
+            "total_jobs": 0,
+            "accepted": 0,
+            "rejected": 0,
+            "accept_rate": 0.0,
+            "reject_histogram": {},
+        }
+        return ([], []) if return_manifest_rows else []
     total_jobs = len(jobs)
     print(f"Using augmentation devices: {devices}")
     shards = [jobs[index::len(devices)] for index in range(len(devices))]
@@ -287,7 +297,6 @@ def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKE
         if accepted:
             print(f"  scale correction share of accepted: {scale_corrected_count / accepted:.3f}")
             print(f"  seamless clone success rate: {seamless_clone_used_count / accepted:.3f}")
-    global LAST_MANIFEST_ROWS, LAST_REJECT_HISTOGRAM, LAST_AUGMENTATION_SUMMARY
     LAST_MANIFEST_ROWS = manifest_rows
     LAST_REJECT_HISTOGRAM = reject_histogram
     LAST_AUGMENTATION_SUMMARY = {
@@ -584,7 +593,7 @@ def reset_runtime_config():
 # Run this cell, then call reset_runtime_config() whenever you want to undo runtime autotune changes.
 
 def run_smoke(records, smoke_images=10, smoke_splits=None):
-    smoke_splits = smoke_splits or ["train"]
+    smoke_splits = smoke_splits or TARGET_SPLITS
     generated_paths, manifest_rows = augment_dataset(
         records,
         variants=AUGMENTATION_VARIANTS,
