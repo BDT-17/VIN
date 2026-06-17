@@ -239,7 +239,9 @@ class AddItJointAttnProcessor2_0:
         B = hidden_states.shape[0]
         inner_dim = attn.to_k(hidden_states).shape[-1]
         head_dim = inner_dim // attn.heads
-        w = self.state.w_source
+        w_source = self.state.w_source
+        w_self = self.state.w_self
+        w_text = max(0.05, 1.0 - w_source - w_self)
 
         # Target image tokens Q,K,V
         query = self._reshape_heads(attn.to_q(hidden_states), attn.heads)
@@ -259,17 +261,18 @@ class AddItJointAttnProcessor2_0:
             enc_key = self._reshape_heads(attn.add_k_proj(encoder_hidden_states), attn.heads)
             enc_value = self._reshape_heads(attn.add_v_proj(encoder_hidden_states), attn.heads)
 
-            # Build extended Q, K, V
+            # Build extended Q, K, V. Add-it weights the keys from each
+            # information source so attention balances prompt, target, source.
             # Q = [text_target, image_target]  (unchanged)
-            # K = [text_target, image_target, image_source]  (extended)
-            # V = [text_target, image_target, image_source * w]  (extended + weighted)
+            # K = [text_target * w_text, image_target * w_self, image_source * w_source]
+            # V = [text_target, image_target, image_source]
             full_query = torch.cat([enc_query, query], dim=2)
-            full_key = torch.cat([enc_key, key, src_key], dim=2)
-            full_value = torch.cat([enc_value, value, src_value * w], dim=2)
+            full_key = torch.cat([enc_key * w_text, key * w_self, src_key * w_source], dim=2)
+            full_value = torch.cat([enc_value, value, src_value], dim=2)
         else:
             full_query = query
-            full_key = torch.cat([key, src_key], dim=2)
-            full_value = torch.cat([value, src_value * w], dim=2)
+            full_key = torch.cat([key * w_self, src_key * w_source], dim=2)
+            full_value = torch.cat([value, src_value], dim=2)
 
         out = F.scaled_dot_product_attention(full_query, full_key, full_value, attn_mask=None)
         out = out.transpose(1, 2).reshape(B, -1, inner_dim)

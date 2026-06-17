@@ -23,7 +23,7 @@ from sd35_config import *  # noqa: F401,F403
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. Weighted Extended-Attention
 # ═══════════════════════════════════════════════════════════════════════════
-ADDIT_WEIGHTED_EXTENDED_ATTENTION = False  # Enable extended attention
+ADDIT_WEIGHTED_EXTENDED_ATTENTION = True   # Enable extended attention
 ADDIT_ATTENTION_SCHEDULE = "cosine"       # cosine | linear | constant
 ADDIT_W_SOURCE_START     = 0.70           # w_source at step 0 (noisy)
 ADDIT_W_SOURCE_END       = 0.05           # w_source at final step (clean)
@@ -51,11 +51,11 @@ ADDIT_FINAL_COMPOSITE_MODE  = "bbox"      # bbox = exact background outside bbox
 ADDIT_FINAL_COMPOSITE_FEATHER_PX = 0      # 0 preserves outside pixels exactly; >0 softens the boundary
 ADDIT_FINAL_PERSON_CUTOUT = True          # after Add-it generation, cut detected person and paste onto source
 ADDIT_PERSON_CUTOUT_CONF = 0.15           # YOLO-seg confidence for extracting generated person
-ADDIT_PERSON_CUTOUT_MASK_THRESHOLD = 64    # keep real person mask pixels; drop weak background probabilities
-ADDIT_PERSON_CUTOUT_DILATE_PX = 1          # keep accessories/body overlap, but avoid pasting a full region
+ADDIT_PERSON_CUTOUT_MASK_THRESHOLD = 48    # keep weak lower-body mask pixels without falling back to bbox paste
+ADDIT_PERSON_CUTOUT_DILATE_PX = 2          # keep accessories/feet while still preserving background outside the mask
 ADDIT_PERSON_CUTOUT_FEATHER_PX = 0.45      # very thin edge blend so the person does not look like a sticker
-ADDIT_PERSON_CUTOUT_EDGE_MIN_ALPHA = 48    # alpha below this becomes background
-ADDIT_PERSON_CUTOUT_EDGE_FULL_ALPHA = 120  # alpha above this keeps generated person fully
+ADDIT_PERSON_CUTOUT_EDGE_MIN_ALPHA = 24    # alpha below this becomes background
+ADDIT_PERSON_CUTOUT_EDGE_FULL_ALPHA = 96   # alpha above this keeps generated person fully
 ADDIT_PERSON_CUTOUT_FALLBACK_TO_BBOX = False  # never paste the whole insert bbox when segmentation fails
 
 # Multi-GPU Add-it runtime. The notebook loads SD3.5 on GPU 0, then moves the

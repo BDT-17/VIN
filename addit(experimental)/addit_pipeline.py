@@ -501,6 +501,26 @@ class AddItCityPersonsPipeline:
         bx1, by1, bx2, by2 = box_b
         return min(ax2, bx2) > max(ax1, bx1) and min(ay2, by2) > max(ay1, by1)
 
+    @staticmethod
+    def _recover_weak_lower_body_mask(mask_np, soft_mask_np, box, threshold):
+        """Keep weak YOLO mask pixels around legs/feet without pasting full bbox."""
+        height, width = mask_np.shape
+        x1, y1, x2, y2 = [int(round(v)) for v in box]
+        x1 = max(0, min(width - 1, x1))
+        x2 = max(x1 + 1, min(width, x2))
+        y1 = max(0, min(height - 1, y1))
+        y2 = max(y1 + 1, min(height, y2))
+        lower_y = y1 + int((y2 - y1) * 0.55)
+        weak_threshold = max(12, int(threshold * 0.55))
+        lower_soft = soft_mask_np[lower_y:y2, x1:x2]
+        lower_keep = lower_soft >= weak_threshold
+        if np.any(lower_keep):
+            mask_np[lower_y:y2, x1:x2] = np.maximum(
+                mask_np[lower_y:y2, x1:x2],
+                lower_keep.astype(np.uint8) * 255,
+            )
+        return mask_np
+
     def _extract_generated_person_mask(
         self,
         generated_image: Image.Image,
@@ -535,21 +555,28 @@ class AddItCityPersonsPipeline:
             return None
 
         masks = det.masks.data.cpu().numpy()
+        threshold = int(ADDIT_PERSON_CUTOUT_MASK_THRESHOLD)
+        selected_soft_masks = []
         for idx in selected_indices:
-            person_mask = (masks[idx] > 0.5).astype(np.uint8) * 255
+            person_mask = np.clip(masks[idx] * 255.0, 0, 255).astype(np.uint8)
             person_mask_img = Image.fromarray(person_mask, mode="L").resize(
                 (width, height), Image.Resampling.BILINEAR
             )
-            mask_np = np.maximum(mask_np, np.array(person_mask_img, dtype=np.uint8))
+            soft_mask_np = np.array(person_mask_img, dtype=np.uint8)
+            selected_soft_masks.append((soft_mask_np, boxes[idx]))
+            mask_np = np.maximum(
+                mask_np,
+                np.where(soft_mask_np >= threshold, 255, 0).astype(np.uint8),
+            )
+
+        for soft_mask_np, box in selected_soft_masks:
+            mask_np = self._recover_weak_lower_body_mask(
+                mask_np, soft_mask_np, box, threshold
+            )
 
         if not np.any(mask_np):
             return None
 
-        mask_np = np.where(
-            mask_np >= int(ADDIT_PERSON_CUTOUT_MASK_THRESHOLD),
-            255,
-            0,
-        ).astype(np.uint8)
         mask = Image.fromarray(mask_np, mode="L")
         if ADDIT_PERSON_CUTOUT_DILATE_PX > 0:
             size = 1 + 2 * int(ADDIT_PERSON_CUTOUT_DILATE_PX)
