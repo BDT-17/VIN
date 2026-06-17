@@ -33,6 +33,10 @@ try:
     from .addit_config import (
         ADDIT_ATTENTION_LAYER_RANGE,
         ADDIT_ATTENTION_SCHEDULE,
+        ADDIT_ADAPTIVE_RETRY_ENABLED,
+        ADDIT_ADAPTIVE_MAX_EXTRA_STEPS,
+        ADDIT_ADAPTIVE_MAX_GUIDANCE_DELTA,
+        ADDIT_ADAPTIVE_MAX_STRENGTH_DELTA,
         ADDIT_WEIGHTED_EXTENDED_ATTENTION,
         ADDIT_BLEND_END_RATIO,
         ADDIT_BLEND_FEATHER_LATENT,
@@ -97,6 +101,10 @@ except ImportError:
     from addit_config import (
         ADDIT_ATTENTION_LAYER_RANGE,
         ADDIT_ATTENTION_SCHEDULE,
+        ADDIT_ADAPTIVE_RETRY_ENABLED,
+        ADDIT_ADAPTIVE_MAX_EXTRA_STEPS,
+        ADDIT_ADAPTIVE_MAX_GUIDANCE_DELTA,
+        ADDIT_ADAPTIVE_MAX_STRENGTH_DELTA,
         ADDIT_WEIGHTED_EXTENDED_ATTENTION,
         ADDIT_BLEND_END_RATIO,
         ADDIT_BLEND_FEATHER_LATENT,
@@ -332,6 +340,8 @@ class AddItCityPersonsPipeline:
         num_inference_steps: int,
         seed: int,
         device,
+        w_source_range: Optional[Tuple[float, float]] = None,
+        w_self_range: Optional[Tuple[float, float]] = None,
     ) -> Image.Image:
         """Core Add-it denoising loop implementing all three mechanisms.
 
@@ -354,6 +364,8 @@ class AddItCityPersonsPipeline:
         resolution = RESOLUTION
         generator = torch.Generator(device=device if str(device).startswith("cuda") else "cpu")
         generator.manual_seed(seed)
+        w_source_range = w_source_range or (ADDIT_W_SOURCE_START, ADDIT_W_SOURCE_END)
+        w_self_range = w_self_range or (ADDIT_W_SELF_START, ADDIT_W_SELF_END)
 
         # ── 1. Encode source ──
         source_latent = encode_image_to_latent(
@@ -427,8 +439,8 @@ class AddItCityPersonsPipeline:
                     step=i,
                     total_steps=total_steps,
                     schedule=ADDIT_ATTENTION_SCHEDULE,
-                    w_source_range=(ADDIT_W_SOURCE_START, ADDIT_W_SOURCE_END),
-                    w_self_range=(ADDIT_W_SELF_START, ADDIT_W_SELF_END),
+                    w_source_range=w_source_range,
+                    w_self_range=w_self_range,
                 )
                 self.state.set_weights(w_src, w_self)
 
@@ -696,6 +708,127 @@ class AddItCityPersonsPipeline:
             return False, f"blurry_generated_person_{sharpness:.2f}"
         return True, ""
 
+    @staticmethod
+    def _clamp(value: float, lower: float, upper: float) -> float:
+        return max(lower, min(upper, value))
+
+    @classmethod
+    def _build_adaptive_retry_config(
+        cls,
+        base_prompt: str,
+        base_negative_prompt: str,
+        base_strength: float,
+        base_guidance: float,
+        base_steps: int,
+        reject_reason: Optional[str],
+        attempt: int,
+    ) -> Dict:
+        """Adjust Add-it generation inputs for the next attempt."""
+        config = {
+            "prompt": base_prompt,
+            "negative_prompt": base_negative_prompt,
+            "strength": base_strength,
+            "guidance": base_guidance,
+            "steps": base_steps,
+            "w_source_range": (ADDIT_W_SOURCE_START, ADDIT_W_SOURCE_END),
+            "w_self_range": (ADDIT_W_SELF_START, ADDIT_W_SELF_END),
+            "adaptive_reason": reject_reason or "",
+            "adaptive_note": "base",
+        }
+        if not ADDIT_ADAPTIVE_RETRY_ENABLED or not reject_reason or attempt <= 0:
+            return config
+
+        reason = str(reject_reason)
+        strength_delta = min(ADDIT_ADAPTIVE_MAX_STRENGTH_DELTA, 0.025 * attempt)
+        guidance_delta = min(ADDIT_ADAPTIVE_MAX_GUIDANCE_DELTA, 0.22 * attempt)
+        extra_steps = min(ADDIT_ADAPTIVE_MAX_EXTRA_STEPS, 2 * attempt)
+        prompt_boost = ""
+        negative_boost = ""
+        w_source_start = ADDIT_W_SOURCE_START
+        w_source_end = ADDIT_W_SOURCE_END
+        w_self_start = ADDIT_W_SELF_START
+        w_self_end = ADDIT_W_SELF_END
+        note = "seed_only"
+
+        if (
+            "no_generated_person_cutout" in reason
+            or "no_person_detected" in reason
+            or "no_person_class" in reason
+            or "yolo_no_results" in reason
+        ):
+            prompt_boost = ", clearly visible newly added full-body pedestrian, distinct from the original scene"
+            negative_boost = ", empty insertion area, no added person, invisible person"
+            config["strength"] = base_strength + strength_delta
+            config["guidance"] = base_guidance + guidance_delta
+            w_source_start -= 0.12
+            w_source_end -= 0.02
+            w_self_start += 0.08
+            w_self_end += 0.04
+            note = "force_visible_person"
+        elif "no_visible_new_person_change" in reason:
+            prompt_boost = ", clearly visible new pedestrian, strong foreground silhouette, visible clothing and legs"
+            negative_boost = ", unchanged image, no edit, invisible person, ghost"
+            config["strength"] = base_strength + min(ADDIT_ADAPTIVE_MAX_STRENGTH_DELTA, strength_delta + 0.02)
+            config["guidance"] = base_guidance + guidance_delta
+            w_source_start -= 0.16
+            w_source_end -= 0.03
+            w_self_start += 0.10
+            w_self_end += 0.06
+            note = "increase_edit_visibility"
+        elif "blurry_generated_person" in reason:
+            prompt_boost = ", sharp detailed full-body pedestrian, crisp legs and feet, clear silhouette"
+            negative_boost = ", blurry person, soft legs, smeared feet, low detail"
+            config["strength"] = base_strength - min(ADDIT_ADAPTIVE_MAX_STRENGTH_DELTA, 0.015 * attempt)
+            config["guidance"] = base_guidance + min(ADDIT_ADAPTIVE_MAX_GUIDANCE_DELTA, 0.16 * attempt)
+            config["steps"] = base_steps + extra_steps
+            w_source_start -= 0.06
+            w_self_start += 0.04
+            note = "sharpen_person"
+        elif "generated_person_mask_too_small" in reason or "low_person_conf" in reason:
+            prompt_boost = ", larger clear full-body pedestrian, detectable human shape, visible head torso legs and feet"
+            negative_boost = ", tiny person, partial person, cropped body, weak silhouette"
+            config["strength"] = base_strength + strength_delta
+            config["guidance"] = base_guidance + guidance_delta
+            config["steps"] = base_steps + min(ADDIT_ADAPTIVE_MAX_EXTRA_STEPS, attempt)
+            w_source_start -= 0.10
+            w_self_start += 0.06
+            note = "grow_detectable_person"
+        elif "person_not_in_insertion_region" in reason:
+            prompt_boost = ", pedestrian exactly inside the marked insertion area, grounded feet on road or sidewalk"
+            negative_boost = ", person outside target area, misplaced pedestrian, floating person"
+            config["guidance"] = base_guidance + min(ADDIT_ADAPTIVE_MAX_GUIDANCE_DELTA, 0.18 * attempt)
+            config["steps"] = base_steps + min(ADDIT_ADAPTIVE_MAX_EXTRA_STEPS, attempt)
+            w_source_start += 0.04
+            w_self_start -= 0.02
+            note = "improve_placement"
+        elif "yolo_validation_error" in reason:
+            config["steps"] = base_steps + min(ADDIT_ADAPTIVE_MAX_EXTRA_STEPS, attempt)
+            note = "stabilize_validation"
+
+        config["prompt"] = base_prompt + prompt_boost
+        config["negative_prompt"] = base_negative_prompt + negative_boost
+        config["strength"] = cls._clamp(
+            float(config["strength"]),
+            max(0.20, base_strength - ADDIT_ADAPTIVE_MAX_STRENGTH_DELTA),
+            min(0.92, base_strength + ADDIT_ADAPTIVE_MAX_STRENGTH_DELTA),
+        )
+        config["guidance"] = cls._clamp(
+            float(config["guidance"]),
+            max(1.0, base_guidance - 0.20),
+            base_guidance + ADDIT_ADAPTIVE_MAX_GUIDANCE_DELTA,
+        )
+        config["steps"] = int(max(1, min(base_steps + ADDIT_ADAPTIVE_MAX_EXTRA_STEPS, config["steps"])))
+        config["w_source_range"] = (
+            cls._clamp(w_source_start, 0.10, 0.90),
+            cls._clamp(w_source_end, 0.02, 0.35),
+        )
+        config["w_self_range"] = (
+            cls._clamp(w_self_start, 0.05, 0.90),
+            cls._clamp(w_self_end, 0.20, 0.95),
+        )
+        config["adaptive_note"] = note
+        return config
+
     def _native_img2img_fallback(
         self,
         source_image: Image.Image,
@@ -760,15 +893,15 @@ class AddItCityPersonsPipeline:
         device = device or str(self.device)
         seed = seed if seed is not None else ADDIT_SEED
         overrides = ADDIT_VARIANT_OVERRIDES.get(variant, {})
-        strength = overrides.get("strength", ADDIT_STRUCTURE_STRENGTH)
-        guidance = overrides.get("guidance", ADDIT_GUIDANCE_SCALE)
-        steps = overrides.get("steps", ADDIT_NUM_INFERENCE_STEPS)
+        base_strength = overrides.get("strength", ADDIT_STRUCTURE_STRENGTH)
+        base_guidance = overrides.get("guidance", ADDIT_GUIDANCE_SCALE)
+        base_steps = overrides.get("steps", ADDIT_NUM_INFERENCE_STEPS)
 
-        target_prompt = ADDIT_TARGET_PROMPTS.get(
+        base_target_prompt = ADDIT_TARGET_PROMPTS.get(
             variant,
             VARIANT_PROMPTS.get(variant, "urban street photo with a pedestrian"),
         )
-        negative_prompt = ADDIT_NEGATIVE_PROMPT
+        base_negative_prompt = ADDIT_NEGATIVE_PROMPT
 
         # Load and resize source
         source_pil = load_source_image(record.path)
@@ -793,41 +926,66 @@ class AddItCityPersonsPipeline:
 
         # Retry loop
         best_result = None
+        last_reject_reason = None
         for attempt in range(ADDIT_MAX_RETRIES + 1):
             attempt_seed = seed + attempt * ADDIT_RETRY_SEED_STEP
+            attempt_config = self._build_adaptive_retry_config(
+                base_target_prompt,
+                base_negative_prompt,
+                base_strength,
+                base_guidance,
+                base_steps,
+                last_reject_reason,
+                attempt,
+            )
+            if attempt > 0:
+                print(
+                    "  Adaptive Add-it retry "
+                    f"{attempt}: reason={last_reject_reason}, "
+                    f"mode={attempt_config['adaptive_note']}, "
+                    f"strength={attempt_config['strength']:.2f}, "
+                    f"guidance={attempt_config['guidance']:.2f}, "
+                    f"steps={attempt_config['steps']}, "
+                    f"w_source={attempt_config['w_source_range']}, "
+                    f"w_self={attempt_config['w_self_range']}"
+                )
             try:
                 result_image = self._addit_denoise(
                     source_image=source_resized,
                     insert_bbox=insert_bbox,
-                    target_prompt=target_prompt,
-                    negative_prompt=negative_prompt,
-                    strength=strength,
-                    guidance_scale=guidance,
-                    num_inference_steps=steps,
+                    target_prompt=attempt_config["prompt"],
+                    negative_prompt=attempt_config["negative_prompt"],
+                    strength=attempt_config["strength"],
+                    guidance_scale=attempt_config["guidance"],
+                    num_inference_steps=attempt_config["steps"],
                     seed=attempt_seed,
                     device=device,
+                    w_source_range=attempt_config["w_source_range"],
+                    w_self_range=attempt_config["w_self_range"],
                 )
             except Exception as exc:
                 print(f"  Add-it denoise failed (attempt {attempt + 1}): "
                       f"{type(exc).__name__}: {exc}")
                 traceback.print_exc(limit=6)
+                last_reject_reason = f"addit_denoise_error_{type(exc).__name__}"
                 if not ADDIT_FALLBACK_TO_NATIVE_IMG2IMG:
                     continue
                 print("  Falling back to native SD3 img2img for this attempt.")
                 try:
                     result_image = self._native_img2img_fallback(
                         source_image=source_resized,
-                        target_prompt=target_prompt,
-                        negative_prompt=negative_prompt,
-                        strength=strength,
-                        guidance_scale=guidance,
-                        num_inference_steps=steps,
+                        target_prompt=attempt_config["prompt"],
+                        negative_prompt=attempt_config["negative_prompt"],
+                        strength=attempt_config["strength"],
+                        guidance_scale=attempt_config["guidance"],
+                        num_inference_steps=attempt_config["steps"],
                         seed=attempt_seed,
                         device=device,
                     )
                 except Exception as fallback_exc:
                     print(f"  Native fallback failed: {type(fallback_exc).__name__}: {fallback_exc}")
                     traceback.print_exc(limit=6)
+                    last_reject_reason = f"native_fallback_error_{type(fallback_exc).__name__}"
                     continue
 
             paste_meta = {
@@ -871,10 +1029,16 @@ class AddItCityPersonsPipeline:
                     metadata={
                         **(insert_meta or {}),
                         **paste_meta,
-                        "strength": strength,
-                        "guidance": guidance,
-                        "steps": steps,
+                        "strength": attempt_config["strength"],
+                        "guidance": attempt_config["guidance"],
+                        "steps": attempt_config["steps"],
                         "attempt": attempt,
+                        "adaptive_reason": attempt_config["adaptive_reason"],
+                        "adaptive_note": attempt_config["adaptive_note"],
+                        "adaptive_prompt": attempt_config["prompt"],
+                        "adaptive_negative_prompt": attempt_config["negative_prompt"],
+                        "adaptive_w_source_range": attempt_config["w_source_range"],
+                        "adaptive_w_self_range": attempt_config["w_self_range"],
                     },
                     debug_path=debug_path,
                 )
@@ -882,6 +1046,7 @@ class AddItCityPersonsPipeline:
                     break
 
             if not is_valid and attempt < ADDIT_MAX_RETRIES:
+                last_reject_reason = reject_reason
                 print(f"  Rejected ({reject_reason}), retrying "
                       f"({attempt + 1}/{ADDIT_MAX_RETRIES})…")
 

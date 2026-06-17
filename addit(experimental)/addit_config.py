@@ -75,6 +75,10 @@ ADDIT_NUM_INFERENCE_STEPS = 36
 ADDIT_GUIDANCE_SCALE      = 7.0
 ADDIT_SEED                = 42
 ADDIT_FALLBACK_TO_NATIVE_IMG2IMG = True  # keep smoke runs useful if custom denoise fails
+ADDIT_ADAPTIVE_RETRY_ENABLED = True      # adapt prompt/params after each rejection reason
+ADDIT_ADAPTIVE_MAX_STRENGTH_DELTA = 0.08
+ADDIT_ADAPTIVE_MAX_GUIDANCE_DELTA = 0.70
+ADDIT_ADAPTIVE_MAX_EXTRA_STEPS = 8
 
 # Per-variant overrides (mirroring parent VARIANT_PROFILE structure).
 ADDIT_VARIANT_OVERRIDES = {
