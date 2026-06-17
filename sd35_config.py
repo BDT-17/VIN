@@ -3,10 +3,14 @@
 from pathlib import Path
 
 # User-facing settings: change these between runs.
-RUN_PRESET = "batch"  # smoke | quality | batch
+RUN_PRESET = "smoke"  # smoke | quality | batch
 
 USER_CONFIG = {
     "DATASET_ROOT_CANDIDATES": [
+        Path('/kaggle/input/datasets/nguyenaabcxyzeric/cityperson'),
+        Path('/kaggle/input/datasets/nguyenaabcxyzeric/CityPerson'),
+        Path('/kaggle/input/datasets/nguyenaabcxyzeric/cityperson/test/images'),
+        Path('/kaggle/input/datasets/nguyenaabcxyzeric/CityPerson/test/images'),
         Path('/kaggle/input/datasets/muttahirulislam/citypersons-dataset-with-bg-image/yolo_dir/yolo_dir'),
         Path('/kaggle/input/citypersons-dataset-with-bg-image/yolo_dir/yolo_dir'),
         Path('/kaggle/input/citypersons-dataset-with-bg-image'),
@@ -41,6 +45,7 @@ USER_CONFIG = {
 }
 
 PARAMETER_OVERRIDES = {
+    "TARGET_SPLITS": ["test"],
     # Keep this short. Put manual one-off changes here, e.g.:
     # "CONTEXT_GENERATION_RETRIES": 4,
     # "MAX_PERSON_PERSON_OVERLAP_RATIO": 0.18,
@@ -403,10 +408,28 @@ def looks_like_roboflow_citypersons_root(path):
     )
 
 
+def normalize_dataset_root_candidate(path):
+    path = Path(path)
+    candidates = [path]
+    if path.name == "images" and path.parent.name in {"train", "valid", "val", "test"}:
+        candidates.append(path.parent.parent)
+    if path.name in {"train", "valid", "val", "test"}:
+        candidates.append(path.parent)
+    for parent in path.parents:
+        if parent.name.lower() in {"cityperson", "citypersons"}:
+            candidates.append(parent)
+            break
+    for candidate in candidates:
+        if looks_like_roboflow_citypersons_root(candidate):
+            return candidate
+    return path
+
+
 def resolve_dataset_root(candidates):
     for path in candidates:
-        if looks_like_roboflow_citypersons_root(path):
-            return Path(path)
+        root = normalize_dataset_root_candidate(path)
+        if looks_like_roboflow_citypersons_root(root):
+            return Path(root)
     kaggle_input = Path("/kaggle/input")
     if kaggle_input.exists():
         for path in sorted(kaggle_input.rglob("data.yaml")):
@@ -424,10 +447,12 @@ LABEL_ROOT = DATASET_ROOT
 DATASET_SPLIT_DIRS = {
     "train": DATASET_ROOT / "train" / "images",
     "val": DATASET_ROOT / VALID_SPLIT_NAME / "images",
+    "test": DATASET_ROOT / "test" / "images",
 }
 LABEL_SPLIT_DIRS = {
     "train": DATASET_ROOT / "train" / "labels",
     "val": DATASET_ROOT / VALID_SPLIT_NAME / "labels",
+    "test": DATASET_ROOT / "test" / "labels",
 }
 METRICS_DIR = Path("/kaggle/working/metrics")
 METRICS_CSV_PATH = METRICS_DIR / "augmentation_metrics.csv"
