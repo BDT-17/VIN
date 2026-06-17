@@ -20,6 +20,7 @@ import random
 import time
 import traceback
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -58,6 +59,10 @@ try:
         ADDIT_PERSON_CUTOUT_FALLBACK_TO_BBOX,
         ADDIT_PERSON_CUTOUT_FEATHER_PX,
         ADDIT_PERSON_CUTOUT_MASK_THRESHOLD,
+        ADDIT_REQUIRE_PERSON_CUTOUT,
+        ADDIT_MIN_PERSON_CUTOUT_AREA_RATIO,
+        ADDIT_MIN_PERSON_CUTOUT_MAE_255,
+        ADDIT_MIN_PERSON_CUTOUT_SHARPNESS,
         ADDIT_RETRY_SEED_STEP,
         ADDIT_SAVE_DEBUG,
         ADDIT_SEED,
@@ -118,6 +123,10 @@ except ImportError:
         ADDIT_PERSON_CUTOUT_FALLBACK_TO_BBOX,
         ADDIT_PERSON_CUTOUT_FEATHER_PX,
         ADDIT_PERSON_CUTOUT_MASK_THRESHOLD,
+        ADDIT_REQUIRE_PERSON_CUTOUT,
+        ADDIT_MIN_PERSON_CUTOUT_AREA_RATIO,
+        ADDIT_MIN_PERSON_CUTOUT_MAE_255,
+        ADDIT_MIN_PERSON_CUTOUT_SHARPNESS,
         ADDIT_RETRY_SEED_STEP,
         ADDIT_SAVE_DEBUG,
         ADDIT_SEED,
@@ -205,7 +214,13 @@ class AddItCityPersonsPipeline:
         Path / name of the YOLOv8m-seg model for validation.
     """
 
-    def __init__(self, sd35_pipe, yolo_model_path: str = "yolov8m-seg.pt", device: Optional[str] = None):
+    def __init__(
+        self,
+        sd35_pipe,
+        yolo_model_path: str = "yolov8m-seg.pt",
+        device: Optional[str] = None,
+        use_transformer_split: bool = True,
+    ):
         self.pipe = sd35_pipe
         self.vae = sd35_pipe.vae
         self.transformer = sd35_pipe.transformer
@@ -222,6 +237,7 @@ class AddItCityPersonsPipeline:
         self.prompt_device = _module_device(prompt_module, fallback=str(self.transformer_device))
         self.device = self.transformer_device
         self.dtype = first_param.dtype
+        self.use_transformer_split = use_transformer_split
 
         # Attention state & original processors
         self.state = AddItState()
@@ -324,7 +340,8 @@ class AddItCityPersonsPipeline:
         base_device = torch.device(device)
         generation_device = base_device
         if (
-            ADDIT_USE_TWO_GPUS
+            self.use_transformer_split
+            and ADDIT_USE_TWO_GPUS
             and torch.cuda.is_available()
             and torch.cuda.device_count() >= 2
             and str(base_device).startswith("cuda")
@@ -521,6 +538,31 @@ class AddItCityPersonsPipeline:
             )
         return mask_np
 
+    @staticmethod
+    def _mask_area_ratio(mask: Image.Image, threshold: int = 24) -> float:
+        mask_arr = np.asarray(mask.convert("L"), dtype=np.uint8)
+        return float(np.mean(mask_arr > threshold))
+
+    @staticmethod
+    def _masked_mae_255(image_a: Image.Image, image_b: Image.Image, mask: Image.Image, threshold: int = 24) -> float:
+        arr_a = np.asarray(image_a.convert("RGB"), dtype=np.float32)
+        arr_b = np.asarray(image_b.convert("RGB"), dtype=np.float32)
+        mask_arr = np.asarray(mask.convert("L"), dtype=np.uint8) > threshold
+        if not np.any(mask_arr):
+            return 0.0
+        return float(np.mean(np.abs(arr_a[mask_arr] - arr_b[mask_arr])))
+
+    @staticmethod
+    def _masked_gradient_sharpness(image: Image.Image, mask: Image.Image, threshold: int = 24) -> float:
+        arr = np.asarray(image.convert("RGB"), dtype=np.float32)
+        luma = arr[..., 0] * 0.2126 + arr[..., 1] * 0.7152 + arr[..., 2] * 0.0722
+        grad_y, grad_x = np.gradient(luma)
+        grad_mag = np.sqrt(grad_x * grad_x + grad_y * grad_y)
+        mask_arr = np.asarray(mask.convert("L"), dtype=np.uint8) > threshold
+        if not np.any(mask_arr):
+            return 0.0
+        return float(np.std(grad_mag[mask_arr]))
+
     def _extract_generated_person_mask(
         self,
         generated_image: Image.Image,
@@ -600,10 +642,17 @@ class AddItCityPersonsPipeline:
         source_image: Image.Image,
         generated_image: Image.Image,
         insert_bbox: Tuple[int, int, int, int],
-    ) -> Image.Image:
+    ) -> Tuple[Image.Image, Dict]:
         """Cut the generated person from Add-it output and paste onto source."""
         source = source_image.convert("RGB")
         generated = generated_image.convert("RGB").resize(source.size, Image.LANCZOS)
+        meta = {
+            "person_cutout_mask_found": False,
+            "person_cutout_fallback_used": False,
+            "person_cutout_area_ratio": 0.0,
+            "person_cutout_mae_255": 0.0,
+            "person_cutout_sharpness": 0.0,
+        }
         try:
             mask = self._extract_generated_person_mask(generated, insert_bbox)
         except Exception as exc:
@@ -611,9 +660,16 @@ class AddItCityPersonsPipeline:
             mask = None
 
         if mask is not None:
-            return Image.composite(generated, source, mask)
+            meta.update({
+                "person_cutout_mask_found": True,
+                "person_cutout_area_ratio": self._mask_area_ratio(mask),
+                "person_cutout_mae_255": self._masked_mae_255(generated, source, mask),
+                "person_cutout_sharpness": self._masked_gradient_sharpness(generated, mask),
+            })
+            return Image.composite(generated, source, mask), meta
 
         if ADDIT_PERSON_CUTOUT_FALLBACK_TO_BBOX:
+            meta["person_cutout_fallback_used"] = True
             return composite_generated_region(
                 source_image=source,
                 generated_image=generated,
@@ -621,9 +677,24 @@ class AddItCityPersonsPipeline:
                 expansion=ADDIT_MASK_EXPANSION_RATIO,
                 feather=ADDIT_FINAL_COMPOSITE_FEATHER_PX,
                 mode=ADDIT_FINAL_COMPOSITE_MODE,
-            )
+            ), meta
 
-        return source
+        return source, meta
+
+    @staticmethod
+    def _validate_person_cutout_meta(meta: Dict) -> Tuple[bool, str]:
+        if ADDIT_REQUIRE_PERSON_CUTOUT and not meta.get("person_cutout_mask_found", False):
+            return False, "no_generated_person_cutout"
+        area_ratio = float(meta.get("person_cutout_area_ratio", 0.0))
+        if area_ratio < ADDIT_MIN_PERSON_CUTOUT_AREA_RATIO:
+            return False, f"generated_person_mask_too_small_{area_ratio:.5f}"
+        mae_255 = float(meta.get("person_cutout_mae_255", 0.0))
+        if mae_255 < ADDIT_MIN_PERSON_CUTOUT_MAE_255:
+            return False, f"no_visible_new_person_change_{mae_255:.2f}"
+        sharpness = float(meta.get("person_cutout_sharpness", 0.0))
+        if sharpness < ADDIT_MIN_PERSON_CUTOUT_SHARPNESS:
+            return False, f"blurry_generated_person_{sharpness:.2f}"
+        return True, ""
 
     def _native_img2img_fallback(
         self,
@@ -759,17 +830,25 @@ class AddItCityPersonsPipeline:
                     traceback.print_exc(limit=6)
                     continue
 
+            paste_meta = {
+                "person_cutout_mask_found": not ADDIT_FINAL_PERSON_CUTOUT,
+            }
             if ADDIT_FINAL_PERSON_CUTOUT:
-                result_image = self._paste_generated_person_on_source(
+                result_image, paste_meta = self._paste_generated_person_on_source(
                     source_image=source_resized,
                     generated_image=result_image,
                     insert_bbox=insert_bbox,
                 )
 
-            # Validate with YOLO (lightweight check)
-            is_valid, reject_reason = self._quick_validate(
-                result_image, source_resized, insert_bbox, variant,
-            )
+            is_valid, reject_reason = True, ""
+            if ADDIT_FINAL_PERSON_CUTOUT:
+                is_valid, reject_reason = self._validate_person_cutout_meta(paste_meta)
+
+            # Validate with YOLO only after proving a visible generated cutout exists.
+            if is_valid:
+                is_valid, reject_reason = self._quick_validate(
+                    result_image, source_resized, insert_bbox, variant,
+                )
 
             if is_valid or attempt == ADDIT_MAX_RETRIES:
                 # Save debug
@@ -791,6 +870,7 @@ class AddItCityPersonsPipeline:
                     reject_reason="" if is_valid else reject_reason,
                     metadata={
                         **(insert_meta or {}),
+                        **paste_meta,
                         "strength": strength,
                         "guidance": guidance,
                         "steps": steps,
@@ -958,8 +1038,7 @@ class AddItCityPersonsPipeline:
 
         except Exception as exc:
             print(f"  YOLO validation error: {type(exc).__name__}: {exc}")
-            # If YOLO fails, accept the image optimistically
-            return True, ""
+            return False, f"yolo_validation_error_{type(exc).__name__}"
 
     # ------------------------------------------------------------------
     # Debug visualisation
@@ -1002,3 +1081,179 @@ class AddItCityPersonsPipeline:
         out_path = debug_dir / fname
         strip.save(out_path)
         return out_path
+
+
+def _save_successful_addit_result(result, record, variant, index):
+    if not result.success or result.result_image is None:
+        return
+    out_path = Path(ADDIT_OUTPUT_DIR) / record.split / variant
+    out_path.mkdir(parents=True, exist_ok=True)
+    fname = f"{record.path.stem}_addit_{index:04d}_{variant}.png"
+    result.result_image.save(out_path / fname)
+
+    comp_dir = Path(ADDIT_OUTPUT_DIR) / "comparison_pairs" / record.split
+    comp_dir.mkdir(parents=True, exist_ok=True)
+    comp_fname = f"{record.path.stem}_pair_{index:04d}_{variant}.png"
+    comp_path = comp_dir / comp_fname
+    save_comparison_pair(
+        result.source_image,
+        result.result_image,
+        comp_path,
+        title=f"{variant} | seed={result.seed}",
+    )
+
+
+def _run_addit_shard_on_device(
+    device,
+    jobs,
+    total_jobs,
+    seed,
+    pipeline=None,
+):
+    owns_pipeline = pipeline is None
+    if str(device).startswith("cuda"):
+        torch.cuda.set_device(torch.device(device).index or 0)
+    if pipeline is None:
+        from sd35_model import build_img2img_pipeline
+
+        print(f"[{device}] loading Add-it pipeline for {len(jobs)} jobs")
+        pipe = build_img2img_pipeline(device=device)
+        pipeline = AddItCityPersonsPipeline(
+            pipe,
+            device=device,
+            use_transformer_split=False,
+        )
+    else:
+        print(f"[{device}] using existing Add-it pipeline for {len(jobs)} jobs")
+        pipeline.use_transformer_split = False
+
+    results = []
+    try:
+        for index, record, variant in jobs:
+            image_seed = seed + index * 1000
+            print(
+                f"[{device}] [{index + 1}/{total_jobs}] "
+                f"{record.path.name}  variant={variant}  seed={image_seed}"
+            )
+            t0 = time.time()
+            try:
+                result = pipeline.run_single(
+                    record,
+                    variant,
+                    seed=image_seed,
+                    device=device,
+                )
+            except Exception as exc:
+                print(f"[{device}] ERROR: {type(exc).__name__}: {exc}")
+                traceback.print_exc(limit=6)
+                result = AddItResult(
+                    success=False,
+                    variant=variant,
+                    seed=image_seed,
+                    reject_reason=str(exc),
+                )
+
+            elapsed = time.time() - t0
+            status = "accepted" if result.success else f"rejected ({result.reject_reason})"
+            print(f"[{device}] {status}  attempts={result.attempts}  {elapsed:.1f}s")
+            _save_successful_addit_result(result, record, variant, index)
+            results.append((index, result))
+    finally:
+        if owns_pipeline:
+            try:
+                del pipeline
+            except UnboundLocalError:
+                pass
+            gc.collect()
+            clear_cuda()
+
+    return results
+
+
+def run_addit_batch_multi_gpu(
+    records: List["ImageRecord"],
+    variants: Optional[List[str]] = None,
+    devices: Optional[List[str]] = None,
+    max_images: int = 10,
+    seed: Optional[int] = None,
+    existing_pipeline: Optional[AddItCityPersonsPipeline] = None,
+    existing_device: Optional[str] = None,
+) -> List[AddItResult]:
+    """Run Add-it data-parallel: each GPU gets its own image shard."""
+    seed = seed if seed is not None else ADDIT_SEED
+    total = min(len(records), max_images)
+    all_variants = list(ADDIT_VARIANT_OVERRIDES.keys())
+    jobs = [
+        (
+            index,
+            records[index],
+            variants[index] if variants else all_variants[index % len(all_variants)],
+        )
+        for index in range(total)
+    ]
+
+    if devices is None:
+        if torch.cuda.is_available() and torch.cuda.device_count() >= 2:
+            devices = [f"cuda:{index}" for index in range(torch.cuda.device_count())]
+        else:
+            devices = [TRAIN_DEVICE if torch.cuda.is_available() else "cpu"]
+
+    devices = [str(device) for device in devices]
+    active_shards = [
+        (device, jobs[index::len(devices)])
+        for index, device in enumerate(devices)
+        if jobs[index::len(devices)]
+    ]
+
+    print(f"\n{'=' * 60}")
+    print(f" Add-it Multi-GPU Batch Run - {total} images")
+    print(" Shards:", ", ".join(f"{device}:{len(shard)}" for device, shard in active_shards))
+    print(f"{'=' * 60}\n")
+
+    if len(active_shards) == 1:
+        device, shard = active_shards[0]
+        pipeline = existing_pipeline if existing_device in {None, device} else None
+        shard_results = _run_addit_shard_on_device(device, shard, total, seed, pipeline=pipeline)
+    else:
+        shard_results = []
+        with ThreadPoolExecutor(max_workers=len(active_shards)) as executor:
+            futures = {}
+            for device, shard in active_shards:
+                pipeline = existing_pipeline if existing_device in {None, device} else None
+                future = executor.submit(
+                    _run_addit_shard_on_device,
+                    device,
+                    shard,
+                    total,
+                    seed,
+                    pipeline,
+                )
+                futures[future] = device
+                if pipeline is existing_pipeline:
+                    existing_pipeline = None
+            for future in as_completed(futures):
+                device = futures[future]
+                try:
+                    shard_results.extend(future.result())
+                except Exception as exc:
+                    print(f"[{device}] shard failed: {type(exc).__name__}: {exc}")
+                    traceback.print_exc(limit=6)
+
+    results_by_index = {index: result for index, result in shard_results}
+    results = [
+        results_by_index.get(
+            index,
+            AddItResult(
+                success=False,
+                variant=jobs[index][2],
+                seed=seed + index * 1000,
+                reject_reason="missing_shard_result",
+            ),
+        )
+        for index in range(total)
+    ]
+    accepted = sum(1 for result in results if result.success)
+    print(f"\n{'-' * 60}")
+    print(f" Multi-GPU batch complete: {accepted}/{total} accepted ({100 * accepted / max(1, total):.0f}%)")
+    print(f"{'-' * 60}\n")
+    return results

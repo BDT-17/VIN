@@ -57,6 +57,10 @@ ADDIT_PERSON_CUTOUT_FEATHER_PX = 0.45      # very thin edge blend so the person 
 ADDIT_PERSON_CUTOUT_EDGE_MIN_ALPHA = 24    # alpha below this becomes background
 ADDIT_PERSON_CUTOUT_EDGE_FULL_ALPHA = 96   # alpha above this keeps generated person fully
 ADDIT_PERSON_CUTOUT_FALLBACK_TO_BBOX = False  # never paste the whole insert bbox when segmentation fails
+ADDIT_REQUIRE_PERSON_CUTOUT = True         # reject/retry if no generated person mask is extracted
+ADDIT_MIN_PERSON_CUTOUT_AREA_RATIO = 0.00035  # reject tiny masks that are unlikely to be useful people
+ADDIT_MIN_PERSON_CUTOUT_MAE_255 = 3.0      # reject outputs that are effectively identical to source
+ADDIT_MIN_PERSON_CUTOUT_SHARPNESS = 4.0    # reject very blurry generated-person cutouts
 
 # Multi-GPU Add-it runtime. The notebook loads SD3.5 on GPU 0, then moves the
 # MM-DiT transformer to GPU 1 when available. VAE/text stay on GPU 0.
