@@ -25,27 +25,27 @@ from sd35_config import *  # noqa: F401,F403
 # ═══════════════════════════════════════════════════════════════════════════
 ADDIT_WEIGHTED_EXTENDED_ATTENTION = True   # Enable extended attention
 ADDIT_ATTENTION_SCHEDULE = "cosine"       # cosine | linear | constant
-ADDIT_W_SOURCE_START     = 0.70           # w_source at step 0 (noisy)
-ADDIT_W_SOURCE_END       = 0.05           # w_source at final step (clean)
-ADDIT_W_SELF_START       = 0.20           # w_self at step 0
-ADDIT_W_SELF_END         = 0.85           # w_self at final step
+ADDIT_W_SOURCE_START     = 0.42           # lower source pull so the edit is not copied away
+ADDIT_W_SOURCE_END       = 0.02           # keep late denoising focused on the generated person
+ADDIT_W_SELF_START       = 0.38           # stronger target latent stream for visible insertion
+ADDIT_W_SELF_END         = 0.88           # preserve target detail late in denoising
 # Text weight = 1 - w_source - w_self (implicit, clamped ≥ 0.05)
 ADDIT_ATTENTION_LAYER_RANGE = (0.0, 1.0)  # fraction of layers to inject (0=first, 1=all)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 2. Noise Structure Transfer
 # ═══════════════════════════════════════════════════════════════════════════
-ADDIT_STRUCTURE_STRENGTH  = 0.72          # like img2img strength (0=full noise, 1=source only)
-ADDIT_NOISE_BLEND_RATIO   = 0.85          # blend source noise vs pure random
+ADDIT_STRUCTURE_STRENGTH  = 0.82          # stronger edit budget inside the insertion region
+ADDIT_NOISE_BLEND_RATIO   = 0.72          # less source-correlated noise so new people emerge
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 3. Subject-Guided Latent Blending
 # ═══════════════════════════════════════════════════════════════════════════
-ADDIT_BLEND_FEATHER_LATENT  = 5           # Gaussian blur radius for latent mask edges
+ADDIT_BLEND_FEATHER_LATENT  = 3           # tighter edge; less source overwrite inside the person region
 ADDIT_BLEND_START_RATIO     = 0.0         # blending active from this step ratio
 ADDIT_BLEND_END_RATIO       = 1.0        # blending stops at this step ratio (higher preserves background longer)
-ADDIT_MASK_DILATION_LATENT  = 3           # dilate insertion mask in latent px (tighter mask)
-ADDIT_MASK_EXPANSION_RATIO  = 1.25        # expand bbox by this ratio for mask (tighter mask)
+ADDIT_MASK_DILATION_LATENT  = 5           # give legs/feet enough latent space to form
+ADDIT_MASK_EXPANSION_RATIO  = 1.60        # larger edit island; final YOLO cutout still preserves BG
 ADDIT_FINAL_PIXEL_COMPOSITE = True        # restore original pixels outside insertion region after VAE decode
 ADDIT_FINAL_COMPOSITE_MODE  = "bbox"      # bbox = exact background outside bbox; silhouette = tighter person mask
 ADDIT_FINAL_COMPOSITE_FEATHER_PX = 0      # 0 preserves outside pixels exactly; >0 softens the boundary
@@ -57,6 +57,8 @@ ADDIT_PERSON_CUTOUT_FEATHER_PX = 0.45      # very thin edge blend so the person 
 ADDIT_PERSON_CUTOUT_EDGE_MIN_ALPHA = 24    # alpha below this becomes background
 ADDIT_PERSON_CUTOUT_EDGE_FULL_ALPHA = 96   # alpha above this keeps generated person fully
 ADDIT_PERSON_CUTOUT_FALLBACK_TO_BBOX = False  # never paste the whole insert bbox when segmentation fails
+ADDIT_PERSON_CUTOUT_CONTRAST_BOOST = 1.18  # make added person less washed out before masked paste
+ADDIT_PERSON_CUTOUT_SHARPNESS_BOOST = 1.35 # sharpen only generated person pixels; source BG is untouched
 ADDIT_REQUIRE_PERSON_CUTOUT = True         # reject/retry if no generated person mask is extracted
 ADDIT_MIN_PERSON_CUTOUT_AREA_RATIO = 0.00035  # reject tiny masks that are unlikely to be useful people
 ADDIT_MIN_PERSON_CUTOUT_MAE_255 = 3.0      # reject outputs that are effectively identical to source
@@ -72,22 +74,22 @@ ADDIT_TRANSFORMER_DEVICE = "cuda:1"
 # 4. Generation Defaults (can be overridden per-variant)
 # ═══════════════════════════════════════════════════════════════════════════
 ADDIT_NUM_INFERENCE_STEPS = 36
-ADDIT_GUIDANCE_SCALE      = 7.0
+ADDIT_GUIDANCE_SCALE      = 7.8
 ADDIT_SEED                = 42
 ADDIT_FALLBACK_TO_NATIVE_IMG2IMG = True  # keep smoke runs useful if custom denoise fails
 ADDIT_ADAPTIVE_RETRY_ENABLED = True      # adapt prompt/params after each rejection reason
-ADDIT_ADAPTIVE_MAX_STRENGTH_DELTA = 0.08
-ADDIT_ADAPTIVE_MAX_GUIDANCE_DELTA = 0.70
-ADDIT_ADAPTIVE_MAX_EXTRA_STEPS = 8
+ADDIT_ADAPTIVE_MAX_STRENGTH_DELTA = 0.14
+ADDIT_ADAPTIVE_MAX_GUIDANCE_DELTA = 1.20
+ADDIT_ADAPTIVE_MAX_EXTRA_STEPS = 12
 
 # Per-variant overrides (mirroring parent VARIANT_PROFILE structure).
 ADDIT_VARIANT_OVERRIDES = {
-    "add_single_pedestrian":   {"strength": 0.72, "guidance": 6.8, "steps": 36},
-    "add_two_pedestrians":     {"strength": 0.74, "guidance": 6.9, "steps": 36},
-    "add_small_group":         {"strength": 0.76, "guidance": 7.0, "steps": 38},
-    "add_occluded_pedestrian": {"strength": 0.74, "guidance": 6.8, "steps": 36},
-    "add_distant_pedestrian":  {"strength": 0.68, "guidance": 6.6, "steps": 34},
-    "add_near_pedestrian":     {"strength": 0.76, "guidance": 7.3, "steps": 38},
+    "add_single_pedestrian":   {"strength": 0.82, "guidance": 7.8, "steps": 42},
+    "add_two_pedestrians":     {"strength": 0.84, "guidance": 7.9, "steps": 42},
+    "add_small_group":         {"strength": 0.86, "guidance": 8.0, "steps": 44},
+    "add_occluded_pedestrian": {"strength": 0.84, "guidance": 7.8, "steps": 42},
+    "add_distant_pedestrian":  {"strength": 0.78, "guidance": 7.6, "steps": 40},
+    "add_near_pedestrian":     {"strength": 0.86, "guidance": 8.3, "steps": 44},
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -96,18 +98,19 @@ ADDIT_VARIANT_OVERRIDES = {
 ADDIT_SOURCE_PROMPT = "urban street photo, city scene, natural lighting"
 
 ADDIT_TARGET_PROMPTS = {
-    "add_single_pedestrian":   "urban street photo with one clear full-body pedestrian walking on the sidewalk",
-    "add_two_pedestrians":     "urban street photo with two separate full-body pedestrians walking on the sidewalk",
-    "add_small_group":         "urban street photo with three separate full-body pedestrians in a small group on the sidewalk",
-    "add_occluded_pedestrian": "urban street photo with a partly occluded full-body pedestrian behind a foreground object",
-    "add_distant_pedestrian":  "urban street photo with a distant clear full-body pedestrian",
-    "add_near_pedestrian":     "urban street photo with a near larger full-body pedestrian walking",
+    "add_single_pedestrian":   "urban street photo with one newly added, clearly visible, sharp full-body pedestrian walking on the sidewalk, distinct foreground silhouette, visible legs and feet",
+    "add_two_pedestrians":     "urban street photo with two newly added, clearly visible, separate full-body pedestrians walking on the sidewalk, visible legs and feet",
+    "add_small_group":         "urban street photo with three newly added, clearly visible, separate full-body pedestrians in a small group on the sidewalk",
+    "add_occluded_pedestrian": "urban street photo with a newly added, clearly visible partly occluded full-body pedestrian behind a foreground object, visible body and feet",
+    "add_distant_pedestrian":  "urban street photo with a newly added distant but clearly visible full-body pedestrian, detectable silhouette",
+    "add_near_pedestrian":     "urban street photo with a newly added near larger sharp full-body pedestrian walking, clear clothing, visible legs and feet",
 }
 
 ADDIT_NEGATIVE_PROMPT = (
     "cropped, missing head, missing legs, thin body, giant, closeup, "
     "floating, ghost, bad perspective, hard seam, overlap, "
-    "merged people, fused bodies, blurry, low quality"
+    "merged people, fused bodies, blurry, low quality, faded, transparent, "
+    "low contrast, blended into background, unchanged image, no new person"
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

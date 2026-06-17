@@ -27,7 +27,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
 try:
     from .addit_config import (
@@ -60,9 +60,11 @@ try:
         ADDIT_PERSON_CUTOUT_DILATE_PX,
         ADDIT_PERSON_CUTOUT_EDGE_FULL_ALPHA,
         ADDIT_PERSON_CUTOUT_EDGE_MIN_ALPHA,
+        ADDIT_PERSON_CUTOUT_CONTRAST_BOOST,
         ADDIT_PERSON_CUTOUT_FALLBACK_TO_BBOX,
         ADDIT_PERSON_CUTOUT_FEATHER_PX,
         ADDIT_PERSON_CUTOUT_MASK_THRESHOLD,
+        ADDIT_PERSON_CUTOUT_SHARPNESS_BOOST,
         ADDIT_REQUIRE_PERSON_CUTOUT,
         ADDIT_MIN_PERSON_CUTOUT_AREA_RATIO,
         ADDIT_MIN_PERSON_CUTOUT_MAE_255,
@@ -128,9 +130,11 @@ except ImportError:
         ADDIT_PERSON_CUTOUT_DILATE_PX,
         ADDIT_PERSON_CUTOUT_EDGE_FULL_ALPHA,
         ADDIT_PERSON_CUTOUT_EDGE_MIN_ALPHA,
+        ADDIT_PERSON_CUTOUT_CONTRAST_BOOST,
         ADDIT_PERSON_CUTOUT_FALLBACK_TO_BBOX,
         ADDIT_PERSON_CUTOUT_FEATHER_PX,
         ADDIT_PERSON_CUTOUT_MASK_THRESHOLD,
+        ADDIT_PERSON_CUTOUT_SHARPNESS_BOOST,
         ADDIT_REQUIRE_PERSON_CUTOUT,
         ADDIT_MIN_PERSON_CUTOUT_AREA_RATIO,
         ADDIT_MIN_PERSON_CUTOUT_MAE_255,
@@ -575,6 +579,15 @@ class AddItCityPersonsPipeline:
             return 0.0
         return float(np.std(grad_mag[mask_arr]))
 
+    @staticmethod
+    def _enhance_generated_person_for_paste(generated: Image.Image, mask: Image.Image) -> Image.Image:
+        enhanced = generated.convert("RGB")
+        if ADDIT_PERSON_CUTOUT_CONTRAST_BOOST != 1.0:
+            enhanced = ImageEnhance.Contrast(enhanced).enhance(ADDIT_PERSON_CUTOUT_CONTRAST_BOOST)
+        if ADDIT_PERSON_CUTOUT_SHARPNESS_BOOST != 1.0:
+            enhanced = ImageEnhance.Sharpness(enhanced).enhance(ADDIT_PERSON_CUTOUT_SHARPNESS_BOOST)
+        return Image.composite(enhanced, generated.convert("RGB"), mask)
+
     def _extract_generated_person_mask(
         self,
         generated_image: Image.Image,
@@ -672,13 +685,16 @@ class AddItCityPersonsPipeline:
             mask = None
 
         if mask is not None:
+            generated_for_paste = self._enhance_generated_person_for_paste(generated, mask)
             meta.update({
                 "person_cutout_mask_found": True,
                 "person_cutout_area_ratio": self._mask_area_ratio(mask),
-                "person_cutout_mae_255": self._masked_mae_255(generated, source, mask),
-                "person_cutout_sharpness": self._masked_gradient_sharpness(generated, mask),
+                "person_cutout_mae_255": self._masked_mae_255(generated_for_paste, source, mask),
+                "person_cutout_sharpness": self._masked_gradient_sharpness(generated_for_paste, mask),
+                "person_cutout_contrast_boost": ADDIT_PERSON_CUTOUT_CONTRAST_BOOST,
+                "person_cutout_sharpness_boost": ADDIT_PERSON_CUTOUT_SHARPNESS_BOOST,
             })
-            return Image.composite(generated, source, mask), meta
+            return Image.composite(generated_for_paste, source, mask), meta
 
         if ADDIT_PERSON_CUTOUT_FALLBACK_TO_BBOX:
             meta["person_cutout_fallback_used"] = True
@@ -739,9 +755,9 @@ class AddItCityPersonsPipeline:
             return config
 
         reason = str(reject_reason)
-        strength_delta = min(ADDIT_ADAPTIVE_MAX_STRENGTH_DELTA, 0.025 * attempt)
-        guidance_delta = min(ADDIT_ADAPTIVE_MAX_GUIDANCE_DELTA, 0.22 * attempt)
-        extra_steps = min(ADDIT_ADAPTIVE_MAX_EXTRA_STEPS, 2 * attempt)
+        strength_delta = min(ADDIT_ADAPTIVE_MAX_STRENGTH_DELTA, 0.045 * attempt)
+        guidance_delta = min(ADDIT_ADAPTIVE_MAX_GUIDANCE_DELTA, 0.38 * attempt)
+        extra_steps = min(ADDIT_ADAPTIVE_MAX_EXTRA_STEPS, 3 * attempt)
         prompt_boost = ""
         negative_boost = ""
         w_source_start = ADDIT_W_SOURCE_START
@@ -756,42 +772,46 @@ class AddItCityPersonsPipeline:
             or "no_person_class" in reason
             or "yolo_no_results" in reason
         ):
-            prompt_boost = ", clearly visible newly added full-body pedestrian, distinct from the original scene"
-            negative_boost = ", empty insertion area, no added person, invisible person"
+            prompt_boost = ", prominent newly added full-body pedestrian, high contrast human figure, unmistakably visible, not part of the original image"
+            negative_boost = ", empty insertion area, no added person, invisible person, source image copy"
             config["strength"] = base_strength + strength_delta
             config["guidance"] = base_guidance + guidance_delta
+            config["steps"] = base_steps + extra_steps
+            w_source_start -= 0.20
+            w_source_end -= 0.03
+            w_self_start += 0.12
+            w_self_end += 0.06
+            note = "force_visible_person"
+        elif "no_visible_new_person_change" in reason:
+            prompt_boost = ", obvious new pedestrian added into the scene, strong foreground silhouette, visible clothing, legs and feet, high local contrast"
+            negative_boost = ", unchanged image, no edit, invisible person, ghost, source-only reconstruction"
+            config["strength"] = base_strength + min(ADDIT_ADAPTIVE_MAX_STRENGTH_DELTA, strength_delta + 0.04)
+            config["guidance"] = base_guidance + guidance_delta
+            config["steps"] = base_steps + extra_steps
+            w_source_start -= 0.24
+            w_source_end -= 0.04
+            w_self_start += 0.14
+            w_self_end += 0.08
+            note = "increase_edit_visibility"
+        elif "blurry_generated_person" in reason:
+            prompt_boost = ", sharp detailed full-body pedestrian, crisp legs and feet, clear silhouette, high contrast edges"
+            negative_boost = ", blurry person, soft legs, smeared feet, low detail, faded body, blended into background"
+            config["strength"] = base_strength + min(ADDIT_ADAPTIVE_MAX_STRENGTH_DELTA, 0.02 * attempt)
+            config["guidance"] = base_guidance + min(ADDIT_ADAPTIVE_MAX_GUIDANCE_DELTA, 0.28 * attempt)
+            config["steps"] = base_steps + extra_steps
             w_source_start -= 0.12
             w_source_end -= 0.02
             w_self_start += 0.08
-            w_self_end += 0.04
-            note = "force_visible_person"
-        elif "no_visible_new_person_change" in reason:
-            prompt_boost = ", clearly visible new pedestrian, strong foreground silhouette, visible clothing and legs"
-            negative_boost = ", unchanged image, no edit, invisible person, ghost"
-            config["strength"] = base_strength + min(ADDIT_ADAPTIVE_MAX_STRENGTH_DELTA, strength_delta + 0.02)
-            config["guidance"] = base_guidance + guidance_delta
-            w_source_start -= 0.16
-            w_source_end -= 0.03
-            w_self_start += 0.10
-            w_self_end += 0.06
-            note = "increase_edit_visibility"
-        elif "blurry_generated_person" in reason:
-            prompt_boost = ", sharp detailed full-body pedestrian, crisp legs and feet, clear silhouette"
-            negative_boost = ", blurry person, soft legs, smeared feet, low detail"
-            config["strength"] = base_strength - min(ADDIT_ADAPTIVE_MAX_STRENGTH_DELTA, 0.015 * attempt)
-            config["guidance"] = base_guidance + min(ADDIT_ADAPTIVE_MAX_GUIDANCE_DELTA, 0.16 * attempt)
-            config["steps"] = base_steps + extra_steps
-            w_source_start -= 0.06
-            w_self_start += 0.04
             note = "sharpen_person"
         elif "generated_person_mask_too_small" in reason or "low_person_conf" in reason:
-            prompt_boost = ", larger clear full-body pedestrian, detectable human shape, visible head torso legs and feet"
+            prompt_boost = ", larger clear full-body pedestrian, detectable human shape, visible head torso legs and feet, fills the planned insertion area"
             negative_boost = ", tiny person, partial person, cropped body, weak silhouette"
             config["strength"] = base_strength + strength_delta
             config["guidance"] = base_guidance + guidance_delta
-            config["steps"] = base_steps + min(ADDIT_ADAPTIVE_MAX_EXTRA_STEPS, attempt)
-            w_source_start -= 0.10
-            w_self_start += 0.06
+            config["steps"] = base_steps + extra_steps
+            w_source_start -= 0.18
+            w_source_end -= 0.03
+            w_self_start += 0.10
             note = "grow_detectable_person"
         elif "person_not_in_insertion_region" in reason:
             prompt_boost = ", pedestrian exactly inside the marked insertion area, grounded feet on road or sidewalk"
@@ -819,8 +839,8 @@ class AddItCityPersonsPipeline:
         )
         config["steps"] = int(max(1, min(base_steps + ADDIT_ADAPTIVE_MAX_EXTRA_STEPS, config["steps"])))
         config["w_source_range"] = (
-            cls._clamp(w_source_start, 0.10, 0.90),
-            cls._clamp(w_source_end, 0.02, 0.35),
+            cls._clamp(w_source_start, 0.02, 0.90),
+            cls._clamp(w_source_end, 0.005, 0.35),
         )
         config["w_self_range"] = (
             cls._clamp(w_self_start, 0.05, 0.90),
