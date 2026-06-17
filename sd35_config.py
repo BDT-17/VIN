@@ -7,6 +7,8 @@ RUN_PRESET = "smoke"  # smoke | quality | batch
 
 USER_CONFIG = {
     "DATASET_ROOT_CANDIDATES": [
+        Path('/kaggle/input/datasets/kyoru4444/mot17-02-fcrnn/MOT17-02-FRCNN'),
+        Path('/kaggle/input/datasets/kyoru4444/mot17-02-fcrnn/MOT17-02-FRCNN/img1'),
         Path('/kaggle/input/datasets/nguyenaabcxyzeric/cityperson'),
         Path('/kaggle/input/datasets/nguyenaabcxyzeric/CityPerson'),
         Path('/kaggle/input/datasets/nguyenaabcxyzeric/cityperson/test/images'),
@@ -408,9 +410,16 @@ def looks_like_roboflow_citypersons_root(path):
     )
 
 
+def looks_like_mot_sequence_root(path):
+    path = Path(path)
+    return (path / "img1").exists() and ((path / "gt").exists() or (path / "det").exists())
+
+
 def normalize_dataset_root_candidate(path):
     path = Path(path)
     candidates = [path]
+    if path.name == "img1":
+        candidates.append(path.parent)
     if path.name == "images" and path.parent.name in {"train", "valid", "val", "test"}:
         candidates.append(path.parent.parent)
     if path.name in {"train", "valid", "val", "test"}:
@@ -420,7 +429,7 @@ def normalize_dataset_root_candidate(path):
             candidates.append(parent)
             break
     for candidate in candidates:
-        if looks_like_roboflow_citypersons_root(candidate):
+        if looks_like_roboflow_citypersons_root(candidate) or looks_like_mot_sequence_root(candidate):
             return candidate
     return path
 
@@ -428,7 +437,7 @@ def normalize_dataset_root_candidate(path):
 def resolve_dataset_root(candidates):
     for path in candidates:
         root = normalize_dataset_root_candidate(path)
-        if looks_like_roboflow_citypersons_root(root):
+        if looks_like_roboflow_citypersons_root(root) or looks_like_mot_sequence_root(root):
             return Path(root)
     kaggle_input = Path("/kaggle/input")
     if kaggle_input.exists():
@@ -441,19 +450,24 @@ def resolve_dataset_root(candidates):
 
 # Derived paths.
 DATASET_ROOT = resolve_dataset_root(DATASET_ROOT_CANDIDATES)
-VALID_SPLIT_NAME = "valid" if (DATASET_ROOT / "valid" / "images").exists() else "val"
 IMAGE_ROOT = DATASET_ROOT
 LABEL_ROOT = DATASET_ROOT
-DATASET_SPLIT_DIRS = {
-    "train": DATASET_ROOT / "train" / "images",
-    "val": DATASET_ROOT / VALID_SPLIT_NAME / "images",
-    "test": DATASET_ROOT / "test" / "images",
-}
-LABEL_SPLIT_DIRS = {
-    "train": DATASET_ROOT / "train" / "labels",
-    "val": DATASET_ROOT / VALID_SPLIT_NAME / "labels",
-    "test": DATASET_ROOT / "test" / "labels",
-}
+if looks_like_mot_sequence_root(DATASET_ROOT):
+    VALID_SPLIT_NAME = "test"
+    DATASET_SPLIT_DIRS = {"test": DATASET_ROOT / "img1"}
+    LABEL_SPLIT_DIRS = {"test": DATASET_ROOT / "gt"}
+else:
+    VALID_SPLIT_NAME = "valid" if (DATASET_ROOT / "valid" / "images").exists() else "val"
+    DATASET_SPLIT_DIRS = {
+        "train": DATASET_ROOT / "train" / "images",
+        "val": DATASET_ROOT / VALID_SPLIT_NAME / "images",
+        "test": DATASET_ROOT / "test" / "images",
+    }
+    LABEL_SPLIT_DIRS = {
+        "train": DATASET_ROOT / "train" / "labels",
+        "val": DATASET_ROOT / VALID_SPLIT_NAME / "labels",
+        "test": DATASET_ROOT / "test" / "labels",
+    }
 METRICS_DIR = Path("/kaggle/working/metrics")
 METRICS_CSV_PATH = METRICS_DIR / "augmentation_metrics.csv"
 METRICS_SUMMARY_PATH = METRICS_DIR / "augmentation_metrics_summary.csv"
