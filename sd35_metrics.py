@@ -275,7 +275,10 @@ def compute_affordance_score(image_size, pasted_mask=None, insert_bbox=None, met
         (not placement.get("placement_available") or metrics["placement_score"] >= MIN_PLACEMENT_SCORE)
         and (not scale.get("scale_available") or metrics["scale_score"] >= MIN_SCALE_SCORE)
         and (not occlusion.get("occlusion_available") or metrics["occlusion_score"] >= MIN_OCCLUSION_SCORE)
-        and metrics["affordance_score"] >= MIN_AFFORDANCE_SCORE
+        and (
+            not AFFORDANCE_REJECT_ON_TOTAL_SCORE
+            or metrics["affordance_score"] >= MIN_AFFORDANCE_SCORE
+        )
     )
     return metrics
 
@@ -294,7 +297,7 @@ def affordance_reject_reason(metrics):
         return "bad_scale"
     if metrics.get("occlusion_available") and float(metrics.get("occlusion_score", 0.0)) < MIN_OCCLUSION_SCORE:
         return "bad_occlusion"
-    if float(metrics.get("affordance_score", 0.0)) < MIN_AFFORDANCE_SCORE:
+    if AFFORDANCE_REJECT_ON_TOTAL_SCORE and float(metrics.get("affordance_score", 0.0)) < MIN_AFFORDANCE_SCORE:
         return "low_affordance_score"
     return ""
 

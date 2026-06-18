@@ -913,6 +913,21 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
 
     for attempt in range(max_retries + 1):
         attempt_seed = seed + attempt * 9973
+        if attempt > 0 and last_reject_reason in {"bad_placement", "low_affordance_score"}:
+            retry_bbox, retry_meta = find_insertion_region(
+                record,
+                source,
+                variant,
+                random.Random(attempt_seed + 131),
+                device=device,
+                return_metadata=True,
+                depth_map=depth_map,
+            )
+            if retry_bbox is not None:
+                planned_insert_bbox = tuple(int(round(v)) for v in retry_bbox)
+                planned_insert_meta = retry_meta or planned_insert_meta
+                generation_source = draw_person_guide_on_patch(crop_source, crop_bbox, planned_insert_bbox, variant)
+                mask_image = bbox_mask_for_bbox(crop_source.size, planned_insert_bbox, variant=variant, padding=4, blur=1)
         generator = torch.Generator(device=generator_device).manual_seed(attempt_seed)
         attempt_prompt, attempt_negative_prompt, attempt_strength, attempt_guidance, _attempt_margin = build_retry_config(
             prompt,
