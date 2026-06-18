@@ -29,6 +29,7 @@ except ImportError:
 
 from sd35_config import *
 from sd35_utils import *
+from sd35_metrics import affordance_reject_reason, compute_affordance_score
 
 PERSON_SEGMENTERS = {}
 
@@ -393,6 +394,12 @@ def adaptive_retry_params(base_strength, base_guidance, reject_reason, attempt):
         return min(0.86, base_strength + 0.03 * attempt), min(8.6, base_guidance + 0.55 * attempt)
     if reason == "too_large_for_perspective":
         return max(0.60, base_strength - 0.04 * attempt), max(6.0, base_guidance - 0.60 * attempt)
+    if reason == "bad_scale_too_large":
+        return max(0.58, base_strength - 0.04 * attempt), max(5.8, base_guidance - 0.45 * attempt)
+    if reason == "bad_scale_too_small":
+        return min(0.86, base_strength + 0.04 * attempt), min(8.4, base_guidance + 0.35 * attempt)
+    if reason == "low_affordance_score":
+        return min(0.82, base_strength + 0.02 * attempt), min(8.0, base_guidance + 0.20 * attempt)
     if reason == "partial_or_cropped":
         return max(0.62, base_strength - 0.03 * attempt), max(6.0, base_guidance - 0.20 * attempt)
     return min(0.80, base_strength + 0.02 * attempt), min(7.8, base_guidance + 0.25 * attempt)
@@ -424,6 +431,16 @@ def build_retry_config(base_prompt, base_negative, reject_reason, strength, guid
         attempt_guidance = min(8.4, attempt_guidance + 0.25)
         attempt_prompt += ", visible grounded person"
         attempt_negative += ", tiny, barely visible"
+    elif reject_reason == "bad_scale_too_large":
+        attempt_strength = max(0.58, attempt_strength - 0.03)
+        attempt_guidance = max(5.8, attempt_guidance - 0.30)
+        attempt_prompt += ", smaller realistic pedestrian farther in perspective"
+        attempt_negative += ", giant, closeup, oversized person"
+    elif reject_reason == "bad_scale_too_small":
+        attempt_strength = min(0.86, attempt_strength + 0.03)
+        attempt_guidance = min(8.4, attempt_guidance + 0.25)
+        attempt_prompt += ", clear full-size pedestrian at the marked depth"
+        attempt_negative += ", tiny, miniature, barely visible"
     elif reject_reason in {"partial_or_cropped", "partial_or_cropped_body", "accepted_mask_empty", "mask_too_soft"}:
         attempt_prompt += ", complete body visible"
         attempt_negative += ", cropped head, cropped feet, half body"
@@ -436,6 +453,13 @@ def build_retry_config(base_prompt, base_negative, reject_reason, strength, guid
         attempt_strength = max(0.62, attempt_strength - 0.02)
         attempt_prompt += ", separated depth, no body overlap, distinct silhouettes"
         attempt_negative += ", overlap, merged people, fused bodies, person on person"
+    elif reject_reason == "bad_occlusion":
+        attempt_strength = max(0.62, attempt_strength - 0.02)
+        attempt_prompt += ", plausible partial occlusion, visible body silhouette"
+        attempt_negative += ", excessive overlap, cut off body, merged people"
+    elif reject_reason == "low_affordance_score":
+        attempt_prompt += ", feet on ground, realistic perspective scale, clean visible silhouette"
+        attempt_negative += ", floating, wrong scale, impossible overlap"
     elif reject_reason == "bad_placement":
         attempt_strength = min(0.84, attempt_strength + 0.02)
         attempt_guidance = min(8.2, attempt_guidance + 0.25)
@@ -479,6 +503,11 @@ def should_retry(reason, attempt, max_retries, metadata=None):
         "not_enough_new_people",
         "bad_person_depth_overlap",
         "bad_placement",
+        "bad_scale",
+        "bad_scale_too_large",
+        "bad_scale_too_small",
+        "bad_occlusion",
+        "low_affordance_score",
         "scale_unrecoverable",
         "floating_or_bad_ground",
         "too_small_or_ghost_person",
@@ -617,6 +646,19 @@ def validate_composite_result(source, result, pasted_mask, variant, insert_bbox,
             meta["last_reject_reason"] = "bad_person_depth_overlap"
             return False, "bad_person_depth_overlap", meta
     meta.update(compute_quality_scores(meta))
+    affordance_metrics = compute_affordance_score(
+        source.size,
+        pasted_mask=pasted_mask,
+        insert_bbox=insert_bbox,
+        metadata=meta,
+        variant=variant,
+    )
+    meta.update(affordance_metrics)
+    if not affordance_metrics.get("affordance_valid", False):
+        reason = affordance_reject_reason(affordance_metrics)
+        meta["reject_reason"] = reason
+        meta["last_reject_reason"] = reason
+        return False, reason, meta
     if final_person_diff < final_diff_threshold:
         meta["reject_reason"] = "ghost_person_low_contrast"
         meta["last_reject_reason"] = "ghost_person_low_contrast"
@@ -643,6 +685,11 @@ def normalize_reject_reason(reason_text):
         "floating_or_bad_ground",
         "not_enough_new_people",
         "bad_person_depth_overlap",
+        "bad_scale_too_large",
+        "bad_scale_too_small",
+        "bad_scale",
+        "bad_occlusion",
+        "low_affordance_score",
         "low_person_conf",
         "partial_or_cropped_body",
         "partial_or_cropped",
@@ -656,3 +703,240 @@ def normalize_reject_reason(reason_text):
     if "expected scalar type Half" in text or "mixed dtype" in text:
         return "pipeline_dtype_mismatch"
     return text.split()[0].strip(").,") if text.split() else "unknown"
+
+
+def _safe_metric(value, default=0.0):
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _load_dataset_yaml(data_yaml):
+    try:
+        import yaml
+    except Exception as exc:
+        raise RuntimeError("PyYAML is required to resolve data_yaml for detection utility evaluation.") from exc
+    data_yaml = Path(data_yaml)
+    with data_yaml.open("r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+    root = Path(data.get("path", data_yaml.parent))
+    if not root.is_absolute():
+        root = (data_yaml.parent / root).resolve()
+    return data_yaml, root, data
+
+
+def _resolve_split_images(data_yaml, split="val"):
+    data_yaml, root, data = _load_dataset_yaml(data_yaml)
+    split_value = data.get(split) or data.get("valid" if split == "val" else split)
+    if split_value is None:
+        raise FileNotFoundError(f"Split {split!r} was not found in {data_yaml}.")
+    split_path = Path(split_value)
+    if not split_path.is_absolute():
+        split_path = root / split_path
+    if split_path.is_file():
+        return [Path(line.strip()) for line in split_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not split_path.exists():
+        raise FileNotFoundError(f"Split image path does not exist: {split_path}")
+    return [path for path in sorted(split_path.rglob("*")) if path.suffix.lower() in IMAGE_EXTS]
+
+
+def _label_path_for_image(image_path):
+    image_path = Path(image_path)
+    parts = list(image_path.parts)
+    for index, part in enumerate(parts):
+        if part == "images":
+            label_parts = parts[:index] + ["labels"] + parts[index + 1:]
+            return Path(*label_parts).with_suffix(".txt")
+    return image_path.parent.parent / "labels" / image_path.with_suffix(".txt").name
+
+
+def _load_yolo_label_bboxes(label_path, image_size, class_id=0):
+    label_path = Path(label_path)
+    if not label_path.exists():
+        return []
+    width, height = image_size
+    bboxes = []
+    with label_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            parts = line.strip().split()
+            if len(parts) < 5:
+                continue
+            try:
+                current_class = int(float(parts[0]))
+                if current_class != class_id:
+                    continue
+                xc, yc, bw, bh = [float(value) for value in parts[1:5]]
+            except ValueError:
+                continue
+            x1 = (xc - bw / 2.0) * width
+            y1 = (yc - bh / 2.0) * height
+            x2 = (xc + bw / 2.0) * width
+            y2 = (yc + bh / 2.0) * height
+            bboxes.append((x1, y1, x2, y2))
+    return bboxes
+
+
+def _prediction_bboxes(model, image_path, conf_threshold=0.25, class_id=0):
+    try:
+        results = model.predict(str(image_path), conf=conf_threshold, verbose=False)
+    except Exception:
+        return []
+    if not results:
+        return []
+    boxes = getattr(results[0], "boxes", None)
+    if boxes is None or boxes.xyxy is None:
+        return []
+    xyxy = boxes.xyxy.detach().cpu().numpy()
+    cls = boxes.cls.detach().cpu().numpy() if boxes.cls is not None else np.zeros(len(xyxy))
+    conf = boxes.conf.detach().cpu().numpy() if boxes.conf is not None else np.ones(len(xyxy))
+    detections = []
+    for index, box in enumerate(xyxy):
+        if int(cls[index]) != class_id or float(conf[index]) < conf_threshold:
+            continue
+        detections.append(tuple(float(value) for value in box))
+    return detections
+
+
+def _match_detection_counts(gt_bboxes, pred_bboxes, iou_threshold=0.5):
+    matched_predictions = set()
+    true_positive = 0
+    for gt_bbox in gt_bboxes:
+        best_index = None
+        best_iou = 0.0
+        for index, pred_bbox in enumerate(pred_bboxes):
+            if index in matched_predictions:
+                continue
+            iou = bbox_iou(gt_bbox, pred_bbox)
+            if iou > best_iou:
+                best_iou = iou
+                best_index = index
+        if best_index is not None and best_iou >= iou_threshold:
+            matched_predictions.add(best_index)
+            true_positive += 1
+    false_negative = max(0, len(gt_bboxes) - true_positive)
+    false_positive = max(0, len(pred_bboxes) - len(matched_predictions))
+    return true_positive, false_negative, false_positive
+
+
+def approximate_miss_rate_from_yolo(model, data_yaml, split="val", iou_threshold=0.5, conf_threshold=0.25, class_id=0):
+    """Compute person-level approximate MR = FN / (TP + FN) from YOLO labels and predictions."""
+    image_paths = _resolve_split_images(data_yaml, split=split)
+    num_gt = 0
+    num_tp = 0
+    num_fn = 0
+    num_fp = 0
+    for image_path in image_paths:
+        try:
+            with Image.open(image_path) as image:
+                image_size = image.size
+        except Exception:
+            continue
+        gt_bboxes = _load_yolo_label_bboxes(_label_path_for_image(image_path), image_size, class_id=class_id)
+        pred_bboxes = _prediction_bboxes(model, image_path, conf_threshold=conf_threshold, class_id=class_id)
+        tp, fn, fp = _match_detection_counts(gt_bboxes, pred_bboxes, iou_threshold=iou_threshold)
+        num_gt += len(gt_bboxes)
+        num_tp += tp
+        num_fn += fn
+        num_fp += fp
+    miss_rate = num_fn / max(1, num_tp + num_fn)
+    return {
+        "miss_rate": round(float(miss_rate), 6),
+        "num_gt": int(num_gt),
+        "num_tp": int(num_tp),
+        "num_fn": int(num_fn),
+        "num_fp": int(num_fp),
+    }
+
+
+def evaluate_detection_utility(
+    model_path,
+    data_yaml,
+    split="val",
+    iou_threshold=0.5,
+    conf_threshold=0.25,
+    save_json=True,
+    output_dir=METRICS_DIR,
+):
+    """Evaluate downstream detector utility with YOLO AP metrics and approximate miss rate."""
+    from ultralytics import YOLO
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    model = YOLO(str(model_path))
+    val_result = model.val(
+        data=str(data_yaml),
+        split=split,
+        iou=iou_threshold,
+        conf=conf_threshold,
+        verbose=False,
+    )
+    box = getattr(val_result, "box", None)
+    metrics = {
+        "ap50": round(_safe_metric(getattr(box, "map50", 0.0)), 6),
+        "ap75": round(_safe_metric(getattr(box, "map75", 0.0)), 6),
+        "map50_95": round(_safe_metric(getattr(box, "map", 0.0)), 6),
+        "miss_rate": None,
+        "num_gt": 0,
+        "num_tp": 0,
+        "num_fn": 0,
+        "num_fp": 0,
+        "model_path": str(model_path),
+        "data_yaml": str(data_yaml),
+        "split": split,
+        "iou_threshold": iou_threshold,
+        "conf_threshold": conf_threshold,
+    }
+    try:
+        metrics.update(
+            approximate_miss_rate_from_yolo(
+                model,
+                data_yaml,
+                split=split,
+                iou_threshold=iou_threshold,
+                conf_threshold=conf_threshold,
+                class_id=0,
+            )
+        )
+    except Exception as exc:
+        metrics["miss_rate_warning"] = f"{type(exc).__name__}: {exc}"
+
+    if save_json:
+        json_path = output_dir / f"detection_utility_{split}.json"
+        csv_path = output_dir / f"detection_utility_{split}.csv"
+        json_path.write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(metrics.keys()))
+            writer.writeheader()
+            writer.writerow(metrics)
+        metrics["json_path"] = str(json_path)
+        metrics["csv_path"] = str(csv_path)
+    return metrics
+
+
+def compare_detection_utility(real_only_result, synthetic_result):
+    """Compare real-only and real+synthetic detector results with direction-aware deltas."""
+    real_only_result = real_only_result or {}
+    synthetic_result = synthetic_result or {}
+
+    def delta(key):
+        if real_only_result.get(key) is None or synthetic_result.get(key) is None:
+            return None
+        return round(float(synthetic_result.get(key)) - float(real_only_result.get(key)), 6)
+
+    return {
+        "real_only_ap50": real_only_result.get("ap50"),
+        "synthetic_ap50": synthetic_result.get("ap50"),
+        "delta_ap50": delta("ap50"),
+        "real_only_ap75": real_only_result.get("ap75"),
+        "synthetic_ap75": synthetic_result.get("ap75"),
+        "delta_ap75": delta("ap75"),
+        "real_only_map50_95": real_only_result.get("map50_95"),
+        "synthetic_map50_95": synthetic_result.get("map50_95"),
+        "delta_map50_95": delta("map50_95"),
+        "real_only_mr": real_only_result.get("miss_rate"),
+        "synthetic_mr": synthetic_result.get("miss_rate"),
+        "delta_mr": delta("miss_rate"),
+        "ap_delta_direction": "higher_is_better",
+        "mr_delta_direction": "lower_is_better",
+    }

@@ -9,6 +9,10 @@ USER_CONFIG = {
     "DATASET_ROOT_CANDIDATES": [
         Path('/kaggle/input/datasets/kyoru4444/mot17-02-fcrnn/MOT17-02-FRCNN'),
         Path('/kaggle/input/datasets/kyoru4444/mot17-02-fcrnn/MOT17-02-FRCNN/img1'),
+        Path('/kaggle/input/human-detection-dataset/human detection dataset'),
+        Path('/kaggle/input/human-detection-dataset/human detection dataset/0'),
+        Path('/kaggle/input/datasets/human-detection-dataset/human detection dataset'),
+        Path('/kaggle/input/datasets/human-detection-dataset/human detection dataset/0'),
         Path('/kaggle/input/datasets/nguyenaabcxyzeric/cityperson'),
         Path('/kaggle/input/datasets/nguyenaabcxyzeric/CityPerson'),
         Path('/kaggle/input/datasets/nguyenaabcxyzeric/cityperson/test/images'),
@@ -363,6 +367,20 @@ EDGE_HARMONIZATION_CONFIG = {
  'POISSON_BLEND_ENABLED': False,
 }
 
+AFFORDANCE_CONFIG = {
+ 'AFFORDANCE_SCORE_WEIGHTS': {'placement': 0.4, 'scale': 0.4, 'occlusion': 0.2},
+ 'MIN_PLACEMENT_SCORE': 0.60,
+ 'MIN_SCALE_SCORE': 0.60,
+ 'MIN_OCCLUSION_SCORE': 0.50,
+ 'MIN_AFFORDANCE_SCORE': 0.65,
+ 'AFFORDANCE_PLACEMENT_TOLERANCE_PIXELS': 36,
+ 'AFFORDANCE_PLACEMENT_TOLERANCE_RATIO': 0.07,
+ 'AFFORDANCE_PLACEMENT_BAND_MARGIN': 0.06,
+ 'AFFORDANCE_MIN_VISIBLE_RATIO': 0.18,
+ 'AFFORDANCE_MAX_REASONABLE_OVERLAP': 0.18,
+ 'AFFORDANCE_BORDER_TRUNCATION_PENALTY': 0.35,
+}
+
 ADDIT_CONFIG = {
  'ADDIT_CONCEPT_ENABLED': True,
  'ADDIT_WEIGHTED_EXTENDED_ATTENTION': False,
@@ -387,6 +405,7 @@ CONFIG_GROUPS = [
     GENERATION_CONFIG,
     DEBUG_CONFIG,
     EDGE_HARMONIZATION_CONFIG,
+    AFFORDANCE_CONFIG,
     ADDIT_CONFIG,
 ]
 

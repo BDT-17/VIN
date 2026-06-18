@@ -33,6 +33,7 @@ from sd35_utils import *
 from sd35_model import *
 from sd35_evaluation import *
 from sd35_pipeline import *
+from sd35_metrics import write_metrics_summary
 
 def variant_targets(variant):
     insertion = {
@@ -51,6 +52,7 @@ def write_manifest(rows, output_dir=OUTPUT_DIR):
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "split", "bucket", "source_context", "source_timeofday", "source_scene",
+        "accepted",
         "target_insertion", "target_timeofday", "original_path", "augmented_path",
         "comparison_path", "variant", "strength", "guidance_scale", "num_inference_steps",
         "generation_mode", "insert_bbox", "patch_bbox", "patch_debug_path",
@@ -63,6 +65,11 @@ def write_manifest(rows, output_dir=OUTPUT_DIR):
         "foreground_occlusion_overlap_ratio", "foreground_occlusion_removed_ratio",
         "final_person_person_overlap_ratio",
         "person_score", "scale_score", "background_score", "edge_score", "quality_score",
+        "placement_score", "occlusion_score", "affordance_score",
+        "actual_height", "scale_relative_error", "foot_y_error",
+        "visible_ratio", "overlap_ratio", "truncation_ratio",
+        "valid_grounding", "placement_band_valid", "scale_valid", "occlusion_valid",
+        "affordance_valid", "affordance_available", "affordance_warning",
         "edge_contrast_score", "boundary_laplacian_score", "mask_feather_radius",
         "edge_harmonization_applied", "person_detail_enhanced", "person_detail_sharpness_boost",
         "person_detail_contrast_boost", "contact_shadow_applied", "edge_harmonization_debug_path",
@@ -139,6 +146,28 @@ def run_augmentation_jobs_on_device(device, jobs, total_jobs, backend):
             reason = normalize_reject_reason(exc)
             local_reject_reasons[reason] = local_reject_reasons.get(reason, 0) + 1
             print(f"[{device}] rejected {record.path.name} / {job['variant']}: {exc}")
+            rows.append({
+                "split": record.split,
+                "bucket": record.bucket,
+                "source_context": record.scene or "urban",
+                "source_timeofday": record.timeofday or "",
+                "source_scene": record.scene or "",
+                "accepted": False,
+                "target_insertion": target_insertion,
+                "target_timeofday": target_timeofday,
+                "original_path": str(record.path),
+                "augmented_path": "",
+                "comparison_path": "",
+                "variant": job["variant"],
+                "generation_mode": BACKGROUND_PRESERVATION_MODE,
+                "retry_attempts": CONTEXT_GENERATION_RETRIES,
+                "last_reject_reason": reason,
+                "reject_reason": reason,
+                "seed": job["seed"],
+                "source_path": str(record.path),
+                "label_path": str(record.label_path) if record.label_path else "",
+                "output_path": "",
+            })
             continue
         source_preview = resize_center_crop(load_source_image(record.path), resolution=RESOLUTION)
         augmented_preview = ImageOps.exif_transpose(Image.open(saved)).convert("RGB")
@@ -160,6 +189,7 @@ def run_augmentation_jobs_on_device(device, jobs, total_jobs, backend):
             "source_context": record.scene or "urban",
             "source_timeofday": record.timeofday or "",
             "source_scene": record.scene or "",
+            "accepted": True,
             "target_insertion": target_insertion,
             "target_timeofday": target_timeofday,
             "original_path": str(record.path),
@@ -198,6 +228,22 @@ def run_augmentation_jobs_on_device(device, jobs, total_jobs, backend):
             "background_score": generation_config.get("background_score", ""),
             "edge_score": generation_config.get("edge_score", ""),
             "quality_score": generation_config.get("quality_score", ""),
+            "placement_score": generation_config.get("placement_score", ""),
+            "occlusion_score": generation_config.get("occlusion_score", ""),
+            "affordance_score": generation_config.get("affordance_score", ""),
+            "actual_height": generation_config.get("actual_height", ""),
+            "scale_relative_error": generation_config.get("scale_relative_error", ""),
+            "foot_y_error": generation_config.get("foot_y_error", ""),
+            "visible_ratio": generation_config.get("visible_ratio", ""),
+            "overlap_ratio": generation_config.get("overlap_ratio", ""),
+            "truncation_ratio": generation_config.get("truncation_ratio", ""),
+            "valid_grounding": generation_config.get("valid_grounding", ""),
+            "placement_band_valid": generation_config.get("placement_band_valid", ""),
+            "scale_valid": generation_config.get("scale_valid", ""),
+            "occlusion_valid": generation_config.get("occlusion_valid", ""),
+            "affordance_valid": generation_config.get("affordance_valid", ""),
+            "affordance_available": generation_config.get("affordance_available", ""),
+            "affordance_warning": generation_config.get("affordance_warning", ""),
             "edge_contrast_score": generation_config.get("edge_contrast_score", ""),
             "boundary_laplacian_score": generation_config.get("boundary_laplacian_score", ""),
             "mask_feather_radius": generation_config.get("mask_feather_radius", ""),
@@ -277,9 +323,15 @@ def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKE
         for reason, count in device_rejects.items():
             reject_histogram[reason] = reject_histogram.get(reason, 0) + count
     manifest_rows = sorted(manifest_rows, key=lambda row: row["seed"])
-    all_outputs = [Path(row["output_path"]) for row in manifest_rows]
+    accepted_rows = [row for row in manifest_rows if str(row.get("accepted", True)).lower() == "true" and row.get("output_path")]
+    all_outputs = [Path(row["output_path"]) for row in accepted_rows]
     if write_manifest_file:
         write_manifest(manifest_rows, OUTPUT_DIR)
+    metrics_json_path, metrics_csv_path, metrics_summary = write_metrics_summary(
+        manifest_rows,
+        reject_histogram=reject_histogram,
+        output_dir=Path(OUTPUT_DIR),
+    )
     accepted = len(all_outputs)
     rejected = sum(reject_histogram.values())
     retried = sum(int(row.get("retry_attempts") or 0) for row in manifest_rows)
@@ -296,6 +348,7 @@ def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKE
     print(f"  seamless_clone_used_count: {seamless_clone_used_count}")
     print(f"  fallback_alpha_paste_count: {fallback_alpha_paste_count}")
     print(f"  reject reasons histogram: {reject_histogram}")
+    print(f"  metrics summary: {metrics_json_path}")
     if total_jobs:
         estimated_before_scale_correction_accepts = max(0, accepted - scale_corrected_count)
         print(f"  accept rate before scale correction (estimated): {estimated_before_scale_correction_accepts / total_jobs:.3f}")
@@ -311,6 +364,9 @@ def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKE
         "rejected": rejected,
         "accept_rate": accepted / total_jobs if total_jobs else 0.0,
         "reject_histogram": reject_histogram,
+        "metrics_summary": metrics_summary,
+        "metrics_summary_json": str(metrics_json_path),
+        "metrics_summary_csv": str(metrics_csv_path),
     }
     if return_manifest_rows:
         return all_outputs, manifest_rows
