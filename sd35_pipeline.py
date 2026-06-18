@@ -1005,6 +1005,7 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
             "expected_person_width": (planned_insert_meta or {}).get("expected_person_width", insert_bbox[2] - insert_bbox[0]),
             "ground_y": (planned_insert_meta or {}).get("ground_y", insert_bbox[3]),
             "planned_insert_bbox": planned_insert_bbox,
+            "existing_person_bboxes": existing_person_bboxes,
             "img2img_first": True,
             "retry_attempts": attempt,
             **occlusion_meta,

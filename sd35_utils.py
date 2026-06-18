@@ -31,6 +31,7 @@ from sd35_config import *
 from sd35_data import ImageRecord
 
 SEMANTIC_SEGMENTER = None
+MOT_GT_CACHE = {}
 SEMANTIC_MASK_CACHE = {}
 
 def load_source_image(path):
@@ -129,6 +130,18 @@ def bbox_intersection_area(a, b):
     return max(0, min(ax2, bx2) - max(ax1, bx1)) * max(0, min(ay2, by2) - max(ay1, by1))
 
 
+def bbox_overlap_ratios(a, b):
+    inter = bbox_intersection_area(a, b)
+    area_a = max(1.0, bbox_area(a))
+    area_b = max(1.0, bbox_area(b))
+    return {
+        "intersection": inter,
+        "a": inter / area_a,
+        "b": inter / area_b,
+        "min": inter / min(area_a, area_b),
+    }
+
+
 def union_bboxes(bboxes):
     if not bboxes:
         return None
@@ -150,12 +163,10 @@ def mask_bbox_touches_border(mask_bbox, size, margin=PERSON_BORDER_REJECT_PIXELS
 
 def person_overlap_depth_ok(front_bbox, occluded_bbox):
     """Allow overlap only when the occluded person is plausibly behind the pasted one."""
-    inter = bbox_intersection_area(front_bbox, occluded_bbox)
-    if inter <= 0:
+    overlap = bbox_overlap_ratios(front_bbox, occluded_bbox)
+    if overlap["intersection"] <= 0:
         return True, 0.0
-    front_area = max(1.0, bbox_area(front_bbox))
-    occluded_area = max(1.0, bbox_area(occluded_bbox))
-    overlap_ratio = inter / min(front_area, occluded_area)
+    overlap_ratio = overlap["min"]
     if not ALLOW_PERSON_PERSON_OVERLAP:
         return False, overlap_ratio
     if overlap_ratio > MAX_PERSON_PERSON_OVERLAP_RATIO:
@@ -164,13 +175,11 @@ def person_overlap_depth_ok(front_bbox, occluded_bbox):
     occluded_h = max(1.0, occluded_bbox[3] - occluded_bbox[1])
     front_foot_y = float(front_bbox[3])
     occluded_foot_y = float(occluded_bbox[3])
-    if front_h <= occluded_h:
+    if front_h < occluded_h * PERSON_OVERLAP_MIN_FRONT_HEIGHT_RATIO:
         return False, overlap_ratio
     if occluded_h > front_h * OCCLUDED_PERSON_MAX_HEIGHT_RATIO:
         return False, overlap_ratio
-    if front_foot_y < occluded_foot_y - OCCLUDED_PERSON_MAX_FOOT_Y_DELTA:
-        return False, overlap_ratio
-    if occluded_foot_y > front_foot_y + OCCLUDED_PERSON_MAX_FOOT_Y_DELTA:
+    if front_foot_y + OCCLUDED_PERSON_MAX_FOOT_Y_DELTA < occluded_foot_y:
         return False, overlap_ratio
     return True, overlap_ratio
 
@@ -226,8 +235,84 @@ def load_yolo_bboxes_for_crop(record, original_size, class_ids, resolution=RESOL
     return bboxes
 
 
+def mot_gt_path_for_record(record):
+    record_path = Path(record.path)
+    for parent in [record_path.parent, *record_path.parents]:
+        if parent.name.lower() == "img1":
+            gt_path = parent.parent / "gt" / "gt.txt"
+            if gt_path.exists():
+                return gt_path
+    if record.label_path:
+        label_path = Path(record.label_path)
+        if label_path.name.lower() == "gt.txt":
+            return label_path
+        if label_path.is_dir() and (label_path / "gt.txt").exists():
+            return label_path / "gt.txt"
+    return None
+
+
+def mot_frame_number_from_path(path):
+    try:
+        return int(Path(path).stem)
+    except ValueError:
+        return None
+
+
+def mot_bbox_to_crop_bbox(left, top, width, height, original_size, resolution=RESOLUTION):
+    scale, crop_left, crop_top = center_crop_geometry(original_size, resolution)
+    crop_bbox = (
+        left * scale - crop_left,
+        top * scale - crop_top,
+        (left + width) * scale - crop_left,
+        (top + height) * scale - crop_top,
+    )
+    if crop_bbox[2] <= 0 or crop_bbox[0] >= resolution or crop_bbox[3] <= 0 or crop_bbox[1] >= resolution:
+        return None
+    clamped = clamp_bbox(crop_bbox, resolution, resolution)
+    return clamped if bbox_area(clamped) > 0 else None
+
+
+def load_mot_gt_by_frame(gt_path):
+    gt_path = Path(gt_path)
+    cache_key = str(gt_path.resolve())
+    if cache_key in MOT_GT_CACHE:
+        return MOT_GT_CACHE[cache_key]
+    by_frame = {}
+    with gt_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            parts = [part.strip() for part in line.strip().split(",")]
+            if len(parts) < 6:
+                continue
+            try:
+                frame = int(float(parts[0]))
+                left, top, box_w, box_h = [float(value) for value in parts[2:6]]
+                conf = float(parts[6]) if len(parts) > 6 and parts[6] != "" else 1.0
+                class_id = int(float(parts[7])) if len(parts) > 7 and parts[7] != "" else 1
+            except ValueError:
+                continue
+            if conf <= 0 or class_id != 1 or box_w <= 0 or box_h <= 0:
+                continue
+            by_frame.setdefault(frame, []).append((left, top, box_w, box_h))
+    MOT_GT_CACHE[cache_key] = by_frame
+    return by_frame
+
+
+def load_mot_person_bboxes_for_crop(record, original_size, resolution=RESOLUTION):
+    gt_path = mot_gt_path_for_record(record)
+    frame = mot_frame_number_from_path(record.path)
+    if gt_path is None or frame is None:
+        return []
+    bboxes = []
+    for left, top, box_w, box_h in load_mot_gt_by_frame(gt_path).get(frame, []):
+        bbox = mot_bbox_to_crop_bbox(left, top, box_w, box_h, original_size, resolution=resolution)
+        if bbox:
+            bboxes.append(bbox)
+    return bboxes
+
+
 def load_person_bboxes_for_crop(record, original_size, resolution=RESOLUTION):
-    return load_yolo_bboxes_for_crop(record, original_size, PATCH_PERSON_CLASS_IDS, resolution=resolution)
+    bboxes = load_yolo_bboxes_for_crop(record, original_size, PATCH_PERSON_CLASS_IDS, resolution=resolution)
+    return bboxes or load_mot_person_bboxes_for_crop(record, original_size, resolution=resolution)
 
 
 def load_vehicle_bboxes_for_crop(record, original_size, resolution=RESOLUTION):

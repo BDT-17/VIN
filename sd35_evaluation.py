@@ -251,10 +251,13 @@ def select_new_generated_person_mask(generated_image, existing_person_bboxes=Non
         det_bbox = tuple(float(v) for v in box)
         det_area = max(1, bbox_area(det_bbox))
         old_overlap = 0.0
+        old_min_overlap = 0.0
         old_iou = 0.0
         bad_person_depth_overlap = False
         for old_bbox in existing_person_bboxes:
-            old_overlap = max(old_overlap, bbox_intersection_area(det_bbox, old_bbox) / det_area)
+            overlap = bbox_overlap_ratios(det_bbox, old_bbox)
+            old_overlap = max(old_overlap, overlap["a"])
+            old_min_overlap = max(old_min_overlap, overlap["min"])
             old_iou = max(old_iou, bbox_iou(det_bbox, old_bbox))
             depth_ok, _overlap = person_overlap_depth_ok(det_bbox, old_bbox)
             if not depth_ok:
@@ -262,7 +265,7 @@ def select_new_generated_person_mask(generated_image, existing_person_bboxes=Non
         if bad_person_depth_overlap:
             best_reject_reason = "bad_person_depth_overlap"
             continue
-        if old_overlap > MAX_PERSON_PERSON_OVERLAP_RATIO * 1.25 or old_iou > 0.06:
+        if old_min_overlap > MAX_PERSON_PERSON_OVERLAP_RATIO or old_iou > 0.06:
             best_reject_reason = "bad_person_depth_overlap"
             continue
         if (not ALLOW_PERSON_PERSON_OVERLAP) and (old_overlap > 0.18 or old_iou > 0.08):
@@ -601,6 +604,18 @@ def validate_composite_result(source, result, pasted_mask, variant, insert_bbox,
         expected_h = normalize_expected_person_height(meta.get("expected_person_height"))
         if expected_h:
             meta["final_scale_ratio"] = round(mask_h / max(1.0, expected_h), 4)
+        bad_overlap = False
+        max_overlap = 0.0
+        for old_bbox in meta.get("existing_person_bboxes") or []:
+            depth_ok, overlap_ratio = person_overlap_depth_ok(bbox, old_bbox)
+            max_overlap = max(max_overlap, overlap_ratio)
+            if not depth_ok:
+                bad_overlap = True
+        meta["final_person_person_overlap_ratio"] = round(max_overlap, 4)
+        if bad_overlap:
+            meta["reject_reason"] = "bad_person_depth_overlap"
+            meta["last_reject_reason"] = "bad_person_depth_overlap"
+            return False, "bad_person_depth_overlap", meta
     meta.update(compute_quality_scores(meta))
     if final_person_diff < final_diff_threshold:
         meta["reject_reason"] = "ghost_person_low_contrast"
