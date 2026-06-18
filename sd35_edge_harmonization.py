@@ -48,7 +48,7 @@ def effective_feather_radius(mask):
         return radius
     person_h = max(1, bbox[3] - bbox[1])
     # Tiny pedestrians lose detectability quickly; shrink feather automatically.
-    return max(1, min(radius, int(max(1, person_h * 0.025))))
+    return max(2, min(radius, int(max(2, person_h * 0.045))))
 
 
 def edge_blur_radius():
@@ -142,7 +142,7 @@ def _apply_edge_blur(result_arr, blurred_arr, edge_alpha):
     if blur_radius <= 0:
         return result_arr
     alpha = np.asarray(edge_alpha.convert("L"), dtype=np.float32) / 255.0
-    alpha = np.expand_dims(np.clip(alpha * 0.05, 0.0, 0.05), axis=2)
+    alpha = np.expand_dims(np.clip(alpha * 0.10, 0.0, 0.10), axis=2)
     return result_arr * (1.0 - alpha) + blurred_arr * alpha
 
 
@@ -151,7 +151,7 @@ def _mean_luma_shift(source_arr, result_arr, source_active, result_active):
         return 0.0
     source_luma = float(_luma(source_arr)[source_active].mean())
     result_luma = float(_luma(result_arr)[result_active].mean())
-    return float(np.clip(source_luma - result_luma, -4.0, 4.0))
+    return float(np.clip(source_luma - result_luma, -8.0, 8.0))
 
 
 def _apply_boundary_color_match(source_arr, result_arr, masks):
@@ -164,7 +164,7 @@ def _apply_boundary_color_match(source_arr, result_arr, masks):
     edge_mean, edge_std = _rgb_stats(result_arr, inner_active)
     if bg_mean is None or edge_mean is None:
         return result_arr
-    std_ratio = np.clip(bg_std / edge_std, 0.92, 1.08)
+    std_ratio = np.clip(bg_std / edge_std, 0.86, 1.14)
     corrected = (result_arr - edge_mean.reshape(1, 1, 3)) * std_ratio.reshape(1, 1, 3) + bg_mean.reshape(1, 1, 3)
     luma_shift = _mean_luma_shift(source_arr, result_arr, outer_active, inner_active)
     corrected = corrected + luma_shift
@@ -176,7 +176,7 @@ def _apply_boundary_color_match(source_arr, result_arr, masks):
 
 def _apply_outer_source_cleanup(source_arr, result_arr, masks):
     outer_alpha = np.asarray(masks["outer_boundary"].filter(ImageFilter.GaussianBlur(radius=masks["feather"])), dtype=np.float32) / 255.0
-    outer_alpha = np.expand_dims(np.clip(outer_alpha * 0.06, 0.0, 0.06), axis=2)
+    outer_alpha = np.expand_dims(np.clip(outer_alpha * 0.14, 0.0, 0.14), axis=2)
     return result_arr * (1.0 - outer_alpha) + source_arr * outer_alpha
 
 
