@@ -505,14 +505,9 @@ EDGE_DEBUG_DIR = OUTPUT_DIR / "edge_harmonization_debug"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 BASE_CAPTION = "urban street photo"
 PRESERVATION_PROMPT = (
-    "Insert ONE realistic full-body pedestrian.\n\n"
-    "The pedestrian must be clearly visible, fully opaque, and physically present in the scene.\n\n"
-    "Generate complete human anatomy including head, torso, arms, legs, clothing and shoes.\n\n"
-    "The pedestrian must resemble a real street-camera pedestrian captured in natural urban traffic scenes.\n\n"
-    "Preserve original road texture, vehicles, buildings, perspective and lighting.\n\n"
-    "Do not generate silhouettes, transparent figures, shadows, sketches, outlines or ghost-like humans.\n\n"
-    "Pedestrian scale must match surrounding scene perspective and nearby pedestrians. "
-    "Do not generate oversized foreground humans."
+    "Insert one realistic opaque full-body street pedestrian with head, torso, arms, legs, "
+    "clothing and shoes. Match scene perspective, nearby pedestrian scale, lighting and traffic-camera realism. "
+    "Preserve road, vehicles, buildings and background. No ghost, silhouette, outline, transparency or oversized human."
 )
 
 SCENE_PROMPTS = {
@@ -529,12 +524,10 @@ VARIANT_PROMPTS = {
 }
 
 NEGATIVE_PROMPT = (
-    "cropped, missing head, missing legs, thin body, giant, closeup, floating, ghost, "
-    "bad perspective, hard seam, overlap, merged people, fused bodies, ghost person, "
-    "transparent human, translucent body, semi-transparent pedestrian, shadow person, "
-    "silhouette, outline drawing, wireframe human, invisible body, floating limbs, "
-    "partial body, missing arms, cropped person, faceless person, dark blob, "
-    "black silhouette, faded pedestrian"
+    "ghost person, transparent human, translucent body, semi-transparent pedestrian, shadow person, "
+    "silhouette, outline drawing, wireframe human, invisible body, floating limbs, partial body, "
+    "missing legs, missing arms, cropped person, faceless person, dark blob, black silhouette, "
+    "faded pedestrian, giant, closeup, floating, bad perspective, hard seam, merged people, fused bodies"
 )
 
 

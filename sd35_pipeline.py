@@ -180,7 +180,13 @@ def color_match_person_crop(source_crop, person_rgb, person_mask):
     arr = np.asarray(person_rgb.convert("RGB"), dtype=np.float32)
     corrected = (arr - gen_mean) * (src_std / gen_std) + src_mean
     corrected = np.clip(corrected, 0, 255)
-    blended = arr * (1.0 - COLOR_MATCH_STRENGTH) + corrected * COLOR_MATCH_STRENGTH
+    alpha_3 = foreground_harmonization_alpha(
+        person_mask,
+        min(float(COLOR_MATCH_STRENGTH), 0.10),
+        core_alpha=0.0,
+        edge_erode=1,
+    )
+    blended = arr * (1.0 - alpha_3) + corrected * alpha_3
     return Image.fromarray(np.clip(blended, 0, 255).astype(np.uint8), mode="RGB")
 
 
@@ -209,7 +215,7 @@ def match_person_texture_to_scene(source_crop, person_rgb, person_mask):
     softened = person_rgb.filter(ImageFilter.GaussianBlur(radius=blur_radius))
     arr = np.asarray(person_rgb.convert("RGB"), dtype=np.float32)
     soft = np.asarray(softened.convert("RGB"), dtype=np.float32)
-    alpha_3 = foreground_harmonization_alpha(person_mask, TEXTURE_MATCH_STRENGTH, core_alpha=0.03)
+    alpha_3 = foreground_harmonization_alpha(person_mask, min(float(TEXTURE_MATCH_STRENGTH), 0.04), core_alpha=0.0, edge_erode=1)
     matched = arr * (1.0 - alpha_3) + soft * alpha_3
     return Image.fromarray(np.clip(matched, 0, 255).astype(np.uint8), mode="RGB")
 
@@ -393,13 +399,13 @@ def apply_subtle_scene_tone_filter(source_crop, person_rgb, person_mask):
 def harmonize_person_to_scene(source_crop, person_rgb, person_mask):
     person_rgb = color_match_person_crop(source_crop, person_rgb, person_mask)
     person_rgb = match_person_texture_to_scene(source_crop, person_rgb, person_mask)
-    # Keep harmonization mostly on the boundary. Strong core color matching made
-    # the generated person sink into the background and lose useful detail.
-    person_rgb = local_color_transfer(source_crop, person_rgb, person_mask, strength=0.22)
-    person_rgb = match_local_brightness(source_crop, person_rgb, person_mask, strength=0.28)
-    person_rgb = match_local_contrast(source_crop, person_rgb, person_mask, strength=0.18)
-    person_rgb = match_local_saturation(source_crop, person_rgb, person_mask, strength=0.14)
-    person_rgb = add_sensor_noise(source_crop, person_rgb, person_mask, strength=0.45)
+    # Only the contour band is harmonized. The core remains generated-person pixels
+    # so clothing, limbs, and face/body contrast do not collapse into the background.
+    person_rgb = local_color_transfer(source_crop, person_rgb, person_mask, strength=0.08)
+    person_rgb = match_local_brightness(source_crop, person_rgb, person_mask, strength=0.10)
+    person_rgb = match_local_contrast(source_crop, person_rgb, person_mask, strength=0.06)
+    person_rgb = match_local_saturation(source_crop, person_rgb, person_mask, strength=0.05)
+    person_rgb = add_sensor_noise(source_crop, person_rgb, person_mask, strength=0.18)
     person_rgb = apply_subtle_scene_tone_filter(source_crop, person_rgb, person_mask)
     person_rgb = neutralize_person_edge_halo(source_crop, person_rgb, person_mask)
     person_rgb = soften_dark_person_edge(source_crop, person_rgb, person_mask)
@@ -472,7 +478,7 @@ def soften_dark_person_edge(source_crop, person_rgb, person_mask):
     luma = np.sum(arr * np.array([0.2126, 0.7152, 0.0722], dtype=np.float32).reshape(1, 1, 3), axis=2)
     bg_luma_map = np.sum(background_tone * np.array([0.2126, 0.7152, 0.0722], dtype=np.float32).reshape(1, 1, 3), axis=2)
     dark_edge_boost = np.clip((bg_luma_map - luma) / 95.0, 0.0, 0.35)
-    alpha = np.clip(edge * (0.12 + dark_edge_boost * 0.45), 0.0, 0.24)
+    alpha = np.clip(edge * (0.04 + dark_edge_boost * 0.20), 0.0, 0.08)
     alpha_3 = np.expand_dims(alpha, axis=2)
     softened = arr * (1.0 - alpha_3) + target * alpha_3
     return Image.fromarray(np.clip(softened, 0, 255).astype(np.uint8), mode="RGB")
@@ -487,7 +493,7 @@ def neutralize_person_edge_halo(source_crop, person_rgb, person_mask):
     filter_size = max(3, int(EDGE_HALO_WIDTH) * 2 + 1)
     dilated = np.asarray(hard.filter(ImageFilter.MaxFilter(filter_size)), dtype=np.float32) / 255.0
     outside_ring = np.clip(dilated - hard_arr, 0.0, 1.0)
-    edge_alpha = np.clip(outside_ring * EDGE_HALO_COLOR_MATCH_STRENGTH, 0.0, 1.0)
+    edge_alpha = np.clip(outside_ring * min(float(EDGE_HALO_COLOR_MATCH_STRENGTH), 0.08), 0.0, 0.08)
     edge_active = edge_alpha > 0.02
     if not np.any(edge_active):
         return person_rgb

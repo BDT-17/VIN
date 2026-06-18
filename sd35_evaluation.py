@@ -388,7 +388,9 @@ def adaptive_retry_params(base_strength, base_guidance, reject_reason, attempt):
     if attempt <= 0:
         return base_strength, base_guidance
     reason = reject_reason or "no_person_mask"
-    if reason in {"ghost_person_low_contrast", "too_small_or_ghost_person", "low_person_conf", "no_person_mask"}:
+    if reason in {"ghost_person", "ghost_person_low_contrast", "too_small_or_ghost_person"}:
+        return min(0.88, base_strength + 0.05 * attempt), min(9.0, base_guidance + 1.00 * attempt)
+    if reason in {"low_person_conf", "no_person_mask"}:
         return min(0.84, base_strength + 0.04 * attempt), min(8.2, base_guidance + 0.60 * attempt)
     if reason == "not_enough_new_people":
         return min(0.86, base_strength + 0.03 * attempt), min(8.6, base_guidance + 0.55 * attempt)
@@ -418,7 +420,12 @@ def build_retry_config(base_prompt, base_negative, reject_reason, strength, guid
     attempt_margin = adaptive_context_expand(margin, reject_reason, attempt)
     if attempt <= 0 or not reject_reason:
         return attempt_prompt, attempt_negative, attempt_strength, attempt_guidance, attempt_margin
-    if reject_reason in {"ghost_person_low_contrast", "too_small_or_ghost_person", "low_person_conf", "no_person_mask", "no_person_detected"}:
+    if reject_reason in {"ghost_person", "ghost_person_low_contrast", "too_small_or_ghost_person"}:
+        attempt_strength = min(0.88, attempt_strength + 0.05)
+        attempt_guidance = min(9.0, attempt_guidance + 1.00)
+        attempt_prompt += ", solid opaque pedestrian, realistic clothing texture, street photography, realistic human body"
+        attempt_negative += ", transparent, faded, ghost person, silhouette, translucent body"
+    elif reject_reason in {"low_person_conf", "no_person_mask", "no_person_detected"}:
         attempt_strength = min(0.86, attempt_strength + 0.04)
         attempt_guidance = min(8.6, attempt_guidance + 0.35)
         attempt_prompt += ", clear solid person"
@@ -519,6 +526,7 @@ def should_retry(reason, attempt, max_retries, metadata=None):
 
     post_paste_reasons = {
         "ghost_person_low_contrast",
+        "ghost_person",
         "bad_composite_quality",
         "final_scale_mismatch",
         "accepted_mask_empty",
@@ -681,6 +689,7 @@ def normalize_reject_reason(reason_text):
             return match.group(1).strip(")., ")
     known_reasons = [
         "scale_unrecoverable",
+        "ghost_person",
         "ghost_person_low_contrast",
         "floating_or_bad_ground",
         "not_enough_new_people",
