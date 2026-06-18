@@ -607,14 +607,54 @@ def run_smoke(records, smoke_images=10, smoke_splits=None):
     return generated_paths, manifest_rows, autotune_report
 
 
-def export_outputs():
-    import shutil
-    export_base = Path("/kaggle/working/sd35_citypersons_augmented_export")
-    if export_base.with_suffix(".zip").exists():
-        export_base.with_suffix(".zip").unlink()
-    shutil.make_archive(str(export_base), "zip", str(OUTPUT_DIR))
-    print(f"Saved export: {export_base.with_suffix('.zip')}")
-    return export_base.with_suffix(".zip")
+def _default_export_roots():
+    working_dir = Path("/kaggle/working")
+    roots = [Path(OUTPUT_DIR), Path(METRICS_DIR), Path(AUTOTUNE_SETTINGS.get("snapshot_dir", working_dir / "autotune_snapshots"))]
+    if working_dir.exists():
+        for path in sorted(working_dir.iterdir()):
+            if not path.is_dir():
+                continue
+            if path.name.startswith(("sd35_", "addit_")) or path.name.endswith(("_augmented", "_export")):
+                roots.append(path)
+    unique_roots = []
+    seen = set()
+    for root in roots:
+        root = Path(root)
+        if not root.exists() or not root.is_dir():
+            continue
+        key = str(root.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_roots.append(root)
+    return unique_roots
+
+
+def export_outputs(output_roots=None, export_base=None):
+    import zipfile
+
+    export_base = Path(export_base or "/kaggle/working/sd35_all_datasets_augmented_export")
+    export_zip = export_base.with_suffix(".zip")
+    if export_zip.exists():
+        export_zip.unlink()
+
+    roots = [Path(path) for path in (output_roots or _default_export_roots())]
+    roots = [root for root in roots if root.exists() and root.is_dir()]
+    if not roots:
+        raise FileNotFoundError("No output directories found to export.")
+
+    with zipfile.ZipFile(export_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for root in roots:
+            for file_path in sorted(root.rglob("*")):
+                if not file_path.is_file():
+                    continue
+                archive.write(file_path, Path(root.name) / file_path.relative_to(root))
+
+    print("Exported output directories:")
+    for root in roots:
+        print(f"  - {root}")
+    print(f"Saved export: {export_zip}")
+    return export_zip
 
 
 if __name__ == "__main__":
