@@ -277,25 +277,25 @@ COMPOSITING_CONFIG = {'USE_SEAMLESS_CLONE': False,
  'PERSON_GENERATION_CONTEXT_DARKEN': 0.03,
  'INSERTION_GUIDE_ALPHA': 0.44,
  'INSERTION_GUIDE_BLUR': 0.25,
- 'CONTEXT_CROP_EXPAND': 3.4,
+ 'CONTEXT_CROP_EXPAND': 2.8,
  'CONTEXT_CROP_MIN_SIZE': 192,
  'CONTEXT_INPAINT_MASK_PADDING': 46,
  'COLOR_MATCH_PERSON_TO_SCENE': True,
  'COLOR_MATCH_STRENGTH': 0.45,
  'COLOR_MATCH_CONTEXT_PAD': 18,
- 'FOREGROUND_HARMONIZATION_CORE_ALPHA': 0.02,
- 'FOREGROUND_HARMONIZATION_EDGE_ERODE': 5,
+ 'FOREGROUND_HARMONIZATION_CORE_ALPHA': 0.0,
+ 'FOREGROUND_HARMONIZATION_EDGE_ERODE': 2,
  'TEXTURE_MATCH_PERSON_TO_SCENE': True,
  'TEXTURE_MATCH_STRENGTH': 0.06,
  'TEXTURE_MATCH_MIN_BLUR': 0.10,
  'TEXTURE_MATCH_MAX_BLUR': 0.28,
  'TEXTURE_MATCH_CONTEXT_PAD': 24,
  'PERSON_DETAIL_ENHANCE_ENABLED': True,
- 'PERSON_DETAIL_SHARPNESS_BOOST': 1.32,
- 'PERSON_DETAIL_CONTRAST_BOOST': 1.08,
- 'PERSON_DETAIL_CORE_ERODE': 3,
+ 'PERSON_DETAIL_SHARPNESS_BOOST': 1.45,
+ 'PERSON_DETAIL_CONTRAST_BOOST': 1.12,
+ 'PERSON_DETAIL_CORE_ERODE': 1,
  'EDGE_HALO_NEUTRALIZE': True,
- 'EDGE_HALO_COLOR_MATCH_STRENGTH': 0.18,
+ 'EDGE_HALO_COLOR_MATCH_STRENGTH': 0.08,
  'EDGE_HALO_WIDTH': 1,
  'EDGE_HALO_MIN_ALPHA': 0.16,
  'EDGE_HALO_MAX_ALPHA': 0.72,
@@ -362,10 +362,10 @@ DEBUG_CONFIG = {'DEBUG_SCALE_VISUALIZATION': False}
 
 EDGE_HARMONIZATION_CONFIG = {
  'EDGE_HARMONIZATION_ENABLED': True,
- 'EDGE_FEATHER_RADIUS': 3,
- 'EDGE_BLUR_RADIUS': 0.55,
- 'EDGE_COLOR_MATCH_STRENGTH': 0.14,
- 'EDGE_BAND_WIDTH': 4,
+ 'EDGE_FEATHER_RADIUS': 1,
+ 'EDGE_BLUR_RADIUS': 0.20,
+ 'EDGE_COLOR_MATCH_STRENGTH': 0.06,
+ 'EDGE_BAND_WIDTH': 1,
  'POISSON_BLEND_ENABLED': False,
 }
 
@@ -504,7 +504,16 @@ EDGE_DEBUG_DIR = OUTPUT_DIR / "edge_harmonization_debug"
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 BASE_CAPTION = "urban street photo"
-PRESERVATION_PROMPT = "clear full body, separated silhouette, grounded feet, natural scale"
+PRESERVATION_PROMPT = (
+    "Insert ONE realistic full-body pedestrian.\n\n"
+    "The pedestrian must be clearly visible, fully opaque, and physically present in the scene.\n\n"
+    "Generate complete human anatomy including head, torso, arms, legs, clothing and shoes.\n\n"
+    "The pedestrian must resemble a real street-camera pedestrian captured in natural urban traffic scenes.\n\n"
+    "Preserve original road texture, vehicles, buildings, perspective and lighting.\n\n"
+    "Do not generate silhouettes, transparent figures, shadows, sketches, outlines or ghost-like humans.\n\n"
+    "Pedestrian scale must match surrounding scene perspective and nearby pedestrians. "
+    "Do not generate oversized foreground humans."
+)
 
 SCENE_PROMPTS = {
     "urban_pedestrian_scene": "urban street photo",
@@ -519,7 +528,14 @@ VARIANT_PROMPTS = {
     "add_near_pedestrian": "near larger full-body pedestrian",
 }
 
-NEGATIVE_PROMPT = "cropped, missing head, missing legs, thin body, giant, closeup, floating, ghost, bad perspective, hard seam, overlap, merged people, fused bodies"
+NEGATIVE_PROMPT = (
+    "cropped, missing head, missing legs, thin body, giant, closeup, floating, ghost, "
+    "bad perspective, hard seam, overlap, merged people, fused bodies, ghost person, "
+    "transparent human, translucent body, semi-transparent pedestrian, shadow person, "
+    "silhouette, outline drawing, wireframe human, invisible body, floating limbs, "
+    "partial body, missing arms, cropped person, faceless person, dark blob, "
+    "black silhouette, faded pedestrian"
+)
 
 
 def ensure_output_dirs():
