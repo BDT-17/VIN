@@ -634,9 +634,38 @@ def _default_export_roots():
     return unique_roots
 
 
-def export_outputs(output_roots=None, export_base=None):
+def _zip_directory(root, zip_path):
     import zipfile
 
+    root = Path(root)
+    zip_path = Path(zip_path)
+    if zip_path.exists():
+        zip_path.unlink()
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for file_path in sorted(root.rglob("*")):
+            if not file_path.is_file():
+                continue
+            archive.write(file_path, Path(root.name) / file_path.relative_to(root))
+    return zip_path
+
+
+def _zip_directory_bundle(roots, zip_path):
+    import zipfile
+
+    zip_path = Path(zip_path)
+    if zip_path.exists():
+        zip_path.unlink()
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for root in roots:
+            root = Path(root)
+            for file_path in sorted(root.rglob("*")):
+                if not file_path.is_file():
+                    continue
+                archive.write(file_path, Path(root.name) / file_path.relative_to(root))
+    return zip_path
+
+
+def export_outputs(output_roots=None, export_base=None, extra_zip_roots=None):
     export_base = Path(export_base or "/kaggle/working/sd35_all_datasets_augmented_export")
     export_zip = export_base.with_suffix(".zip")
     if export_zip.exists():
@@ -647,17 +676,20 @@ def export_outputs(output_roots=None, export_base=None):
     if not roots:
         raise FileNotFoundError("No output directories found to export.")
 
-    with zipfile.ZipFile(export_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for root in roots:
-            for file_path in sorted(root.rglob("*")):
-                if not file_path.is_file():
-                    continue
-                archive.write(file_path, Path(root.name) / file_path.relative_to(root))
+    _zip_directory_bundle(roots, export_zip)
+
+    extra_zip_roots = [Path("/kaggle/working/sd35_smoke")] if extra_zip_roots is None else [Path(path) for path in extra_zip_roots]
+    extra_zips = []
+    for root in extra_zip_roots:
+        if root.exists() and root.is_dir():
+            extra_zips.append(_zip_directory(root, root.with_suffix(".zip")))
 
     print("Exported output directories:")
     for root in roots:
         print(f"  - {root}")
     print(f"Saved export: {export_zip}")
+    for zip_path in extra_zips:
+        print(f"Saved extra export: {zip_path}")
     return export_zip
 
 
