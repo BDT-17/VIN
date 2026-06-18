@@ -47,8 +47,10 @@ try:
         ADDIT_FINAL_COMPOSITE_MODE,
         ADDIT_FINAL_PIXEL_COMPOSITE,
         ADDIT_FINAL_PERSON_CUTOUT,
+        ADDIT_FLUX_CPU_OFFLOAD_MODE,
         ADDIT_FLUX_MASK_BLUR_PX,
         ADDIT_FLUX_MASK_PADDING_RATIO,
+        ADDIT_FLUX_MAX_SEQUENCE_LENGTH,
         ADDIT_FLUX_MODEL_ID,
         ADDIT_FLUX_TRUE_CFG_SCALE,
         ADDIT_FLUX_USE_INPAINT,
@@ -125,8 +127,10 @@ except ImportError:
         ADDIT_FINAL_COMPOSITE_MODE,
         ADDIT_FINAL_PIXEL_COMPOSITE,
         ADDIT_FINAL_PERSON_CUTOUT,
+        ADDIT_FLUX_CPU_OFFLOAD_MODE,
         ADDIT_FLUX_MASK_BLUR_PX,
         ADDIT_FLUX_MASK_PADDING_RATIO,
+        ADDIT_FLUX_MAX_SEQUENCE_LENGTH,
         ADDIT_FLUX_MODEL_ID,
         ADDIT_FLUX_TRUE_CFG_SCALE,
         ADDIT_FLUX_USE_INPAINT,
@@ -347,7 +351,19 @@ class AddItCityPersonsPipeline:
             kwargs.pop("low_cpu_mem_usage", None)
             pipe = flux_cls.from_pretrained(ADDIT_FLUX_MODEL_ID, **kwargs)
 
-        if str(requested_device).startswith("cuda") and hasattr(pipe, "enable_model_cpu_offload"):
+        offload_mode = str(ADDIT_FLUX_CPU_OFFLOAD_MODE).lower()
+        if (
+            str(requested_device).startswith("cuda")
+            and offload_mode == "sequential"
+            and hasattr(pipe, "enable_sequential_cpu_offload")
+        ):
+            pipe.enable_sequential_cpu_offload(gpu_id=requested_device.index or 0)
+            print(f"Enabled FLUX sequential CPU offload for {requested_device}")
+        elif (
+            str(requested_device).startswith("cuda")
+            and offload_mode != "none"
+            and hasattr(pipe, "enable_model_cpu_offload")
+        ):
             pipe.enable_model_cpu_offload(gpu_id=requested_device.index or 0)
             print(f"Enabled FLUX model CPU offload for {requested_device}")
         else:
@@ -362,6 +378,14 @@ class AddItCityPersonsPipeline:
         self._flux_pipe = pipe
         self._flux_device = requested_device
         return pipe
+
+    def _unload_flux_pipeline(self):
+        if self._flux_pipe is not None:
+            del self._flux_pipe
+            self._flux_pipe = None
+            self._flux_device = None
+        gc.collect()
+        clear_cuda()
 
     @staticmethod
     def _expand_bbox(bbox, image_size, expansion: float):
@@ -422,6 +446,7 @@ class AddItCityPersonsPipeline:
             "generator": generator,
             "height": source_image.height,
             "width": source_image.width,
+            "max_sequence_length": int(ADDIT_FLUX_MAX_SEQUENCE_LENGTH),
         }
         if ADDIT_FLUX_TRUE_CFG_SCALE and ADDIT_FLUX_TRUE_CFG_SCALE > 1.0:
             kwargs["negative_prompt"] = negative_prompt
@@ -1162,6 +1187,9 @@ class AddItCityPersonsPipeline:
                       f"{type(exc).__name__}: {exc}")
                 traceback.print_exc(limit=6)
                 last_reject_reason = f"addit_generation_error_{type(exc).__name__}"
+                if isinstance(exc, torch.OutOfMemoryError) or "out of memory" in str(exc).lower():
+                    print("  CUDA OOM during Add-it generation; unloading FLUX pipeline before retry.")
+                    self._unload_flux_pipeline()
                 if not ADDIT_FALLBACK_TO_NATIVE_IMG2IMG:
                     continue
                 print("  Falling back to native SD3 img2img for this attempt.")

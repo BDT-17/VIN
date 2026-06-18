@@ -43,7 +43,9 @@ ADDIT_NOISE_BLEND_RATIO   = 0.72          # less source-correlated noise so new 
 # ═══════════════════════════════════════════════════════════════════════════
 ADDIT_GENERATOR_BACKEND = "flux"          # flux = paper-style generate -> segment -> paste; sd35 = custom Add-it denoise
 ADDIT_FLUX_MODEL_ID = "black-forest-labs/FLUX.1-dev"
-ADDIT_FLUX_USE_INPAINT = True             # constrain generation to the insertion bbox before segmentation
+ADDIT_FLUX_USE_INPAINT = False            # img2img is lighter; final YOLO cutout/paste still preserves source pixels
+ADDIT_FLUX_CPU_OFFLOAD_MODE = "sequential"  # sequential | model | none; sequential fits 14-16GB GPUs better
+ADDIT_FLUX_MAX_SEQUENCE_LENGTH = 128       # lower than FLUX default 512 to reduce text/attention memory
 ADDIT_FLUX_TRUE_CFG_SCALE = 1.0            # >1 enables negative_prompt CFG in recent diffusers FLUX pipelines
 ADDIT_FLUX_MASK_PADDING_RATIO = 0.10       # small context around bbox for inpaint mask
 ADDIT_FLUX_MASK_BLUR_PX = 0.0              # keep generated region bounded; final cutout handles edges
