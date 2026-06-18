@@ -48,6 +48,7 @@ try:
         ADDIT_FINAL_PIXEL_COMPOSITE,
         ADDIT_FINAL_PERSON_CUTOUT,
         ADDIT_FLUX_CPU_OFFLOAD_MODE,
+        ADDIT_FLUX_ENCODE_PROMPT_ON_CPU,
         ADDIT_FLUX_MASK_BLUR_PX,
         ADDIT_FLUX_MASK_PADDING_RATIO,
         ADDIT_FLUX_MAX_SEQUENCE_LENGTH,
@@ -128,6 +129,7 @@ except ImportError:
         ADDIT_FINAL_PIXEL_COMPOSITE,
         ADDIT_FINAL_PERSON_CUTOUT,
         ADDIT_FLUX_CPU_OFFLOAD_MODE,
+        ADDIT_FLUX_ENCODE_PROMPT_ON_CPU,
         ADDIT_FLUX_MASK_BLUR_PX,
         ADDIT_FLUX_MASK_PADDING_RATIO,
         ADDIT_FLUX_MAX_SEQUENCE_LENGTH,
@@ -387,6 +389,29 @@ class AddItCityPersonsPipeline:
         gc.collect()
         clear_cuda()
 
+    def _flux_prompt_embed_kwargs(self, flux_pipe, prompt: str) -> Dict:
+        if not ADDIT_FLUX_ENCODE_PROMPT_ON_CPU:
+            return {"prompt": prompt}
+
+        if hasattr(flux_pipe, "maybe_free_model_hooks"):
+            flux_pipe.maybe_free_model_hooks()
+        clear_cuda()
+        with torch.no_grad():
+            embeds = flux_pipe.encode_prompt(
+                prompt=prompt,
+                prompt_2=prompt,
+                device=torch.device("cpu"),
+                num_images_per_prompt=1,
+                max_sequence_length=int(ADDIT_FLUX_MAX_SEQUENCE_LENGTH),
+            )
+        prompt_embeds = embeds[0]
+        pooled_prompt_embeds = embeds[1]
+        return {
+            "prompt": None,
+            "prompt_embeds": prompt_embeds,
+            "pooled_prompt_embeds": pooled_prompt_embeds,
+        }
+
     @staticmethod
     def _expand_bbox(bbox, image_size, expansion: float):
         width, height = image_size
@@ -438,7 +463,6 @@ class AddItCityPersonsPipeline:
             "new pedestrian fully inside the masked insertion area, natural scale, grounded feet"
         )
         kwargs = {
-            "prompt": prompt,
             "image": source_image,
             "strength": strength,
             "guidance_scale": guidance_scale,
@@ -448,6 +472,7 @@ class AddItCityPersonsPipeline:
             "width": source_image.width,
             "max_sequence_length": int(ADDIT_FLUX_MAX_SEQUENCE_LENGTH),
         }
+        kwargs.update(self._flux_prompt_embed_kwargs(flux_pipe, prompt))
         if ADDIT_FLUX_TRUE_CFG_SCALE and ADDIT_FLUX_TRUE_CFG_SCALE > 1.0:
             kwargs["negative_prompt"] = negative_prompt
             kwargs["true_cfg_scale"] = ADDIT_FLUX_TRUE_CFG_SCALE

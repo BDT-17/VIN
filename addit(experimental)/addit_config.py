@@ -45,6 +45,7 @@ ADDIT_GENERATOR_BACKEND = "flux"          # flux = paper-style generate -> segme
 ADDIT_FLUX_MODEL_ID = "black-forest-labs/FLUX.1-dev"
 ADDIT_FLUX_USE_INPAINT = False            # img2img is lighter; final YOLO cutout/paste still preserves source pixels
 ADDIT_FLUX_CPU_OFFLOAD_MODE = "sequential"  # sequential | model | none; sequential fits 14-16GB GPUs better
+ADDIT_FLUX_ENCODE_PROMPT_ON_CPU = True    # avoid CLIP/T5 OOM before FLUX denoising on 14-16GB GPUs
 ADDIT_FLUX_MAX_SEQUENCE_LENGTH = 128       # lower than FLUX default 512 to reduce text/attention memory
 ADDIT_FLUX_TRUE_CFG_SCALE = 1.0            # >1 enables negative_prompt CFG in recent diffusers FLUX pipelines
 ADDIT_FLUX_MASK_PADDING_RATIO = 0.10       # small context around bbox for inpaint mask
