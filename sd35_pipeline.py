@@ -20,7 +20,7 @@ from typing import Optional
 
 import matplotlib.pyplot as plt
 import torch
-from PIL import Image, ImageOps, ImageDraw, ImageFilter, ImageChops
+from PIL import Image, ImageOps, ImageDraw, ImageFilter, ImageChops, ImageEnhance
 
 try:
     import cv2
@@ -681,6 +681,31 @@ def apply_addit_subject_guided_blend(source_crop, target_crop, person_mask, vari
     return Image.composite(target_crop.convert("RGB"), source_crop.convert("RGB"), blend_mask)
 
 
+def enhance_person_detail(person_rgb, person_mask):
+    if not PERSON_DETAIL_ENHANCE_ENABLED:
+        return person_rgb, {"person_detail_enhanced": False}
+    mask = person_mask.convert("L")
+    if mask.getbbox() is None:
+        return person_rgb, {"person_detail_enhanced": False}
+    hard = mask.point(lambda p: 255 if p >= PERSON_PASTE_HARD_THRESHOLD else 0)
+    erode_px = max(0, int(PERSON_DETAIL_CORE_ERODE))
+    core = hard.filter(ImageFilter.MinFilter(erode_px * 2 + 1)) if erode_px > 0 else hard
+    core = core.filter(ImageFilter.GaussianBlur(radius=0.45))
+    if core.getbbox() is None:
+        return person_rgb, {"person_detail_enhanced": False}
+
+    sharpness = max(1.0, float(PERSON_DETAIL_SHARPNESS_BOOST))
+    contrast = max(1.0, float(PERSON_DETAIL_CONTRAST_BOOST))
+    enhanced = ImageEnhance.Sharpness(person_rgb.convert("RGB")).enhance(sharpness)
+    enhanced = ImageEnhance.Contrast(enhanced).enhance(contrast)
+    result = Image.composite(enhanced, person_rgb.convert("RGB"), core)
+    return result, {
+        "person_detail_enhanced": True,
+        "person_detail_sharpness_boost": round(sharpness, 3),
+        "person_detail_contrast_boost": round(contrast, 3),
+    }
+
+
 def seamless_clone_person_crop(source_crop, person_rgb, person_mask):
     if not USE_SEAMLESS_CLONE or cv2 is None:
         return None, False
@@ -817,6 +842,7 @@ def paste_crop_person_to_original(source, generated_crop, person_mask_crop, crop
     person_mask, occlusion_crop, occlusion_meta = apply_foreground_occlusion_mask(person_mask, occlusion_mask, crop_bbox)
     source_crop = source.crop(crop_bbox).resize((crop_w, crop_h), Image.BICUBIC)
     person_rgb = harmonize_person_to_scene(source_crop, person_rgb, person_mask)
+    person_rgb, detail_meta = enhance_person_detail(person_rgb, person_mask)
     cloned_crop, seamless_used = seamless_clone_person_crop(source_crop, person_rgb, person_mask)
     result = source.copy()
     blend_meta = {
@@ -825,6 +851,7 @@ def paste_crop_person_to_original(source, generated_crop, person_mask_crop, crop
         "fallback_alpha_used": not bool(seamless_used),
         "foreground_preserved_after_seamless": False,
         "edge_local_bg_match_used": False,
+        **detail_meta,
         **occlusion_meta,
     }
     if seamless_used and cloned_crop is not None:
