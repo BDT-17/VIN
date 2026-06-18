@@ -1,6 +1,6 @@
 """Add-it end-to-end pipeline for CityPersons pedestrian augmentation.
 
-Wraps a loaded SD3.5 img2img / txt2img pipeline and exposes
+Wraps a loaded FLUX or SD3.5 img2img / txt2img pipeline and exposes
 :meth:`run_single` and :meth:`run_batch` that execute the full
 Add-it denoising loop:
 
@@ -47,6 +47,12 @@ try:
         ADDIT_FINAL_COMPOSITE_MODE,
         ADDIT_FINAL_PIXEL_COMPOSITE,
         ADDIT_FINAL_PERSON_CUTOUT,
+        ADDIT_FLUX_MASK_BLUR_PX,
+        ADDIT_FLUX_MASK_PADDING_RATIO,
+        ADDIT_FLUX_MODEL_ID,
+        ADDIT_FLUX_TRUE_CFG_SCALE,
+        ADDIT_FLUX_USE_INPAINT,
+        ADDIT_GENERATOR_BACKEND,
         ADDIT_GUIDANCE_SCALE,
         ADDIT_FALLBACK_TO_NATIVE_IMG2IMG,
         ADDIT_MASK_DILATION_LATENT,
@@ -64,6 +70,8 @@ try:
         ADDIT_PERSON_CUTOUT_FALLBACK_TO_BBOX,
         ADDIT_PERSON_CUTOUT_FEATHER_PX,
         ADDIT_PERSON_CUTOUT_MASK_THRESHOLD,
+        ADDIT_PERSON_CUTOUT_RECOVER_WEAK_LOWER_BODY,
+        ADDIT_PERSON_CUTOUT_BBOX_EXPANSION_RATIO,
         ADDIT_PERSON_CUTOUT_SHARPNESS_BOOST,
         ADDIT_REQUIRE_PERSON_CUTOUT,
         ADDIT_MIN_PERSON_CUTOUT_AREA_RATIO,
@@ -117,6 +125,12 @@ except ImportError:
         ADDIT_FINAL_COMPOSITE_MODE,
         ADDIT_FINAL_PIXEL_COMPOSITE,
         ADDIT_FINAL_PERSON_CUTOUT,
+        ADDIT_FLUX_MASK_BLUR_PX,
+        ADDIT_FLUX_MASK_PADDING_RATIO,
+        ADDIT_FLUX_MODEL_ID,
+        ADDIT_FLUX_TRUE_CFG_SCALE,
+        ADDIT_FLUX_USE_INPAINT,
+        ADDIT_GENERATOR_BACKEND,
         ADDIT_GUIDANCE_SCALE,
         ADDIT_FALLBACK_TO_NATIVE_IMG2IMG,
         ADDIT_MASK_DILATION_LATENT,
@@ -134,6 +148,8 @@ except ImportError:
         ADDIT_PERSON_CUTOUT_FALLBACK_TO_BBOX,
         ADDIT_PERSON_CUTOUT_FEATHER_PX,
         ADDIT_PERSON_CUTOUT_MASK_THRESHOLD,
+        ADDIT_PERSON_CUTOUT_RECOVER_WEAK_LOWER_BODY,
+        ADDIT_PERSON_CUTOUT_BBOX_EXPANSION_RATIO,
         ADDIT_PERSON_CUTOUT_SHARPNESS_BOOST,
         ADDIT_REQUIRE_PERSON_CUTOUT,
         ADDIT_MIN_PERSON_CUTOUT_AREA_RATIO,
@@ -192,6 +208,15 @@ def _module_device(module, fallback: str = "cpu") -> torch.device:
         return torch.device(fallback)
 
 
+def _flux_dtype_for_device(device) -> torch.dtype:
+    if str(device).startswith("cuda"):
+        try:
+            return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        except Exception:
+            return torch.float16
+    return torch.float32
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Result container
 # ═══════════════════════════════════════════════════════════════════════════
@@ -221,34 +246,50 @@ class AddItCityPersonsPipeline:
     Parameters
     ----------
     sd35_pipe
-        A loaded ``StableDiffusion3Img2ImgPipeline`` (or txt2img) from diffusers.
+        Optional loaded ``StableDiffusion3Img2ImgPipeline`` (or txt2img) from diffusers.
+        The FLUX backend lazy-loads its own pipeline and does not require this.
     yolo_model_path : str
         Path / name of the YOLOv8m-seg model for validation.
     """
 
     def __init__(
         self,
-        sd35_pipe,
+        sd35_pipe=None,
         yolo_model_path: str = "yolov8m-seg.pt",
         device: Optional[str] = None,
         use_transformer_split: bool = True,
     ):
         self.pipe = sd35_pipe
-        self.vae = sd35_pipe.vae
-        self.transformer = sd35_pipe.transformer
-        self.scheduler = sd35_pipe.scheduler
-        first_param = next(sd35_pipe.transformer.parameters())
-        self.param_device = first_param.device
-        self.transformer_device = torch.device(device or self.param_device)
-        self.vae_device = _module_device(self.vae, fallback=str(self.transformer_device))
-        prompt_module = (
-            getattr(sd35_pipe, "text_encoder", None)
-            or getattr(sd35_pipe, "text_encoder_2", None)
-            or getattr(sd35_pipe, "text_encoder_3", None)
-        )
-        self.prompt_device = _module_device(prompt_module, fallback=str(self.transformer_device))
-        self.device = self.transformer_device
-        self.dtype = first_param.dtype
+        self.generator_backend = str(ADDIT_GENERATOR_BACKEND).lower()
+        self._flux_pipe = None
+        self._flux_device = None
+
+        if sd35_pipe is not None:
+            self.vae = sd35_pipe.vae
+            self.transformer = sd35_pipe.transformer
+            self.scheduler = sd35_pipe.scheduler
+            first_param = next(sd35_pipe.transformer.parameters())
+            self.param_device = first_param.device
+            self.transformer_device = torch.device(device or self.param_device)
+            self.vae_device = _module_device(self.vae, fallback=str(self.transformer_device))
+            prompt_module = (
+                getattr(sd35_pipe, "text_encoder", None)
+                or getattr(sd35_pipe, "text_encoder_2", None)
+                or getattr(sd35_pipe, "text_encoder_3", None)
+            )
+            self.prompt_device = _module_device(prompt_module, fallback=str(self.transformer_device))
+            self.device = self.transformer_device
+            self.dtype = first_param.dtype
+        else:
+            self.vae = None
+            self.transformer = None
+            self.scheduler = None
+            self.param_device = torch.device(device or TRAIN_DEVICE)
+            self.transformer_device = torch.device(device or TRAIN_DEVICE)
+            self.vae_device = self.transformer_device
+            self.prompt_device = self.transformer_device
+            self.device = self.transformer_device
+            self.dtype = _flux_dtype_for_device(self.device)
         self.use_transformer_split = use_transformer_split
 
         # Attention state & original processors
@@ -260,11 +301,12 @@ class AddItCityPersonsPipeline:
         self._yolo = None
 
         # Layer range config
-        num_layers = len(self.transformer.transformer_blocks)
-        start = int(num_layers * ADDIT_ATTENTION_LAYER_RANGE[0])
-        end = int(num_layers * ADDIT_ATTENTION_LAYER_RANGE[1]) - 1
-        self.state.layer_start = max(0, start)
-        self.state.layer_end = max(0, end)
+        if self.transformer is not None:
+            num_layers = len(self.transformer.transformer_blocks)
+            start = int(num_layers * ADDIT_ATTENTION_LAYER_RANGE[0])
+            end = int(num_layers * ADDIT_ATTENTION_LAYER_RANGE[1]) - 1
+            self.state.layer_start = max(0, start)
+            self.state.layer_end = max(0, end)
 
     @staticmethod
     def _load_yolo_model(model_path: str):
@@ -281,6 +323,114 @@ class AddItCityPersonsPipeline:
         if self._yolo is None:
             self._yolo = self._load_yolo_model(self._yolo_model_path)
         return self._yolo
+
+    def _load_flux_pipeline(self, device):
+        """Lazy-load the FLUX generator used by the paper-style path."""
+        requested_device = torch.device(device or self.device)
+        if self._flux_pipe is not None and self._flux_device == requested_device:
+            return self._flux_pipe
+
+        if ADDIT_FLUX_USE_INPAINT:
+            from diffusers import FluxInpaintPipeline as flux_cls
+        else:
+            from diffusers import FluxImg2ImgPipeline as flux_cls
+
+        dtype = _flux_dtype_for_device(requested_device)
+        kwargs = {
+            "torch_dtype": dtype,
+            "use_safetensors": True,
+            "low_cpu_mem_usage": True,
+        }
+        try:
+            pipe = flux_cls.from_pretrained(ADDIT_FLUX_MODEL_ID, **kwargs)
+        except TypeError:
+            kwargs.pop("low_cpu_mem_usage", None)
+            pipe = flux_cls.from_pretrained(ADDIT_FLUX_MODEL_ID, **kwargs)
+
+        if str(requested_device).startswith("cuda") and hasattr(pipe, "enable_model_cpu_offload"):
+            pipe.enable_model_cpu_offload(gpu_id=requested_device.index or 0)
+            print(f"Enabled FLUX model CPU offload for {requested_device}")
+        else:
+            pipe.to(requested_device)
+        if hasattr(pipe, "enable_vae_slicing"):
+            pipe.enable_vae_slicing()
+        if hasattr(pipe, "enable_vae_tiling"):
+            pipe.enable_vae_tiling()
+        if hasattr(pipe, "enable_attention_slicing"):
+            pipe.enable_attention_slicing()
+
+        self._flux_pipe = pipe
+        self._flux_device = requested_device
+        return pipe
+
+    @staticmethod
+    def _expand_bbox(bbox, image_size, expansion: float):
+        width, height = image_size
+        x1, y1, x2, y2 = [float(v) for v in bbox]
+        cx = (x1 + x2) * 0.5
+        cy = (y1 + y2) * 0.5
+        bw = max(1.0, (x2 - x1) * float(expansion))
+        bh = max(1.0, (y2 - y1) * float(expansion))
+        return (
+            max(0, int(round(cx - bw * 0.5))),
+            max(0, int(round(cy - bh * 0.5))),
+            min(width, int(round(cx + bw * 0.5))),
+            min(height, int(round(cy + bh * 0.5))),
+        )
+
+    @staticmethod
+    def _make_flux_inpaint_mask(image_size, insert_bbox):
+        width, height = image_size
+        expansion = 1.0 + max(0.0, float(ADDIT_FLUX_MASK_PADDING_RATIO)) * 2.0
+        x1, y1, x2, y2 = AddItCityPersonsPipeline._expand_bbox(
+            insert_bbox, image_size, expansion
+        )
+        mask = Image.new("L", (width, height), 0)
+        draw = ImageDraw.Draw(mask)
+        draw.rectangle((x1, y1, x2, y2), fill=255)
+        if ADDIT_FLUX_MASK_BLUR_PX > 0:
+            mask = mask.filter(ImageFilter.GaussianBlur(radius=ADDIT_FLUX_MASK_BLUR_PX))
+        return mask
+
+    def _flux_generate(
+        self,
+        source_image: Image.Image,
+        insert_bbox: Tuple[int, int, int, int],
+        target_prompt: str,
+        negative_prompt: str,
+        strength: float,
+        guidance_scale: float,
+        num_inference_steps: int,
+        seed: int,
+        device,
+    ) -> Image.Image:
+        """Generate a candidate with FLUX, then downstream segmentation keeps only the person."""
+        flux_pipe = self._load_flux_pipeline(device)
+        flux_device = self._flux_device or torch.device(device)
+        generator_device = flux_device if str(flux_device).startswith("cuda") else "cpu"
+        generator = torch.Generator(device=generator_device).manual_seed(seed)
+        prompt = (
+            f"{target_prompt}, photorealistic CityPersons-style street camera image, "
+            "new pedestrian fully inside the masked insertion area, natural scale, grounded feet"
+        )
+        kwargs = {
+            "prompt": prompt,
+            "image": source_image,
+            "strength": strength,
+            "guidance_scale": guidance_scale,
+            "num_inference_steps": num_inference_steps,
+            "generator": generator,
+            "height": source_image.height,
+            "width": source_image.width,
+        }
+        if ADDIT_FLUX_TRUE_CFG_SCALE and ADDIT_FLUX_TRUE_CFG_SCALE > 1.0:
+            kwargs["negative_prompt"] = negative_prompt
+            kwargs["true_cfg_scale"] = ADDIT_FLUX_TRUE_CFG_SCALE
+        if ADDIT_FLUX_USE_INPAINT:
+            kwargs["mask_image"] = self._make_flux_inpaint_mask(source_image.size, insert_bbox)
+
+        result = flux_pipe(**kwargs)
+        return result.images[0].resize(source_image.size)
 
     # ------------------------------------------------------------------
     # Prompt encoding (delegate to pipe)
@@ -636,15 +786,24 @@ class AddItCityPersonsPipeline:
                 np.where(soft_mask_np >= threshold, 255, 0).astype(np.uint8),
             )
 
-        for soft_mask_np, box in selected_soft_masks:
-            mask_np = self._recover_weak_lower_body_mask(
-                mask_np, soft_mask_np, box, threshold
-            )
+        if ADDIT_PERSON_CUTOUT_RECOVER_WEAK_LOWER_BODY:
+            for soft_mask_np, box in selected_soft_masks:
+                mask_np = self._recover_weak_lower_body_mask(
+                    mask_np, soft_mask_np, box, threshold
+                )
 
         if not np.any(mask_np):
             return None
 
         mask = Image.fromarray(mask_np, mode="L")
+        clip = Image.new("L", (width, height), 0)
+        clip_bbox = self._expand_bbox(
+            insert_bbox,
+            (width, height),
+            ADDIT_PERSON_CUTOUT_BBOX_EXPANSION_RATIO,
+        )
+        ImageDraw.Draw(clip).rectangle(clip_bbox, fill=255)
+        mask = Image.composite(mask, Image.new("L", (width, height), 0), clip)
         if ADDIT_PERSON_CUTOUT_DILATE_PX > 0:
             size = 1 + 2 * int(ADDIT_PERSON_CUTOUT_DILATE_PX)
             mask = mask.filter(ImageFilter.MaxFilter(size=size))
@@ -970,24 +1129,39 @@ class AddItCityPersonsPipeline:
                     f"w_self={attempt_config['w_self_range']}"
                 )
             try:
-                result_image = self._addit_denoise(
-                    source_image=source_resized,
-                    insert_bbox=insert_bbox,
-                    target_prompt=attempt_config["prompt"],
-                    negative_prompt=attempt_config["negative_prompt"],
-                    strength=attempt_config["strength"],
-                    guidance_scale=attempt_config["guidance"],
-                    num_inference_steps=attempt_config["steps"],
-                    seed=attempt_seed,
-                    device=device,
-                    w_source_range=attempt_config["w_source_range"],
-                    w_self_range=attempt_config["w_self_range"],
-                )
+                if self.generator_backend == "flux":
+                    result_image = self._flux_generate(
+                        source_image=source_resized,
+                        insert_bbox=insert_bbox,
+                        target_prompt=attempt_config["prompt"],
+                        negative_prompt=attempt_config["negative_prompt"],
+                        strength=attempt_config["strength"],
+                        guidance_scale=attempt_config["guidance"],
+                        num_inference_steps=attempt_config["steps"],
+                        seed=attempt_seed,
+                        device=device,
+                    )
+                elif self.generator_backend == "sd35":
+                    result_image = self._addit_denoise(
+                        source_image=source_resized,
+                        insert_bbox=insert_bbox,
+                        target_prompt=attempt_config["prompt"],
+                        negative_prompt=attempt_config["negative_prompt"],
+                        strength=attempt_config["strength"],
+                        guidance_scale=attempt_config["guidance"],
+                        num_inference_steps=attempt_config["steps"],
+                        seed=attempt_seed,
+                        device=device,
+                        w_source_range=attempt_config["w_source_range"],
+                        w_self_range=attempt_config["w_self_range"],
+                    )
+                else:
+                    raise ValueError(f"Unsupported Add-it generator backend: {self.generator_backend}")
             except Exception as exc:
-                print(f"  Add-it denoise failed (attempt {attempt + 1}): "
+                print(f"  Add-it generation failed (attempt {attempt + 1}): "
                       f"{type(exc).__name__}: {exc}")
                 traceback.print_exc(limit=6)
-                last_reject_reason = f"addit_denoise_error_{type(exc).__name__}"
+                last_reject_reason = f"addit_generation_error_{type(exc).__name__}"
                 if not ADDIT_FALLBACK_TO_NATIVE_IMG2IMG:
                     continue
                 print("  Falling back to native SD3 img2img for this attempt.")
@@ -1049,6 +1223,9 @@ class AddItCityPersonsPipeline:
                     metadata={
                         **(insert_meta or {}),
                         **paste_meta,
+                        "generator_backend": self.generator_backend,
+                        "flux_model_id": ADDIT_FLUX_MODEL_ID if self.generator_backend == "flux" else "",
+                        "flux_use_inpaint": bool(ADDIT_FLUX_USE_INPAINT) if self.generator_backend == "flux" else False,
                         "strength": attempt_config["strength"],
                         "guidance": attempt_config["guidance"],
                         "steps": attempt_config["steps"],
@@ -1299,10 +1476,12 @@ def _run_addit_shard_on_device(
     if str(device).startswith("cuda"):
         torch.cuda.set_device(torch.device(device).index or 0)
     if pipeline is None:
-        from sd35_model import build_img2img_pipeline
-
         print(f"[{device}] loading Add-it pipeline for {len(jobs)} jobs")
-        pipe = build_img2img_pipeline(device=device)
+        pipe = None
+        if str(ADDIT_GENERATOR_BACKEND).lower() == "sd35":
+            from sd35_model import build_img2img_pipeline
+
+            pipe = build_img2img_pipeline(device=device)
         pipeline = AddItCityPersonsPipeline(
             pipe,
             device=device,

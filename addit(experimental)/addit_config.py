@@ -41,6 +41,13 @@ ADDIT_NOISE_BLEND_RATIO   = 0.72          # less source-correlated noise so new 
 # ═══════════════════════════════════════════════════════════════════════════
 # 3. Subject-Guided Latent Blending
 # ═══════════════════════════════════════════════════════════════════════════
+ADDIT_GENERATOR_BACKEND = "flux"          # flux = paper-style generate -> segment -> paste; sd35 = custom Add-it denoise
+ADDIT_FLUX_MODEL_ID = "black-forest-labs/FLUX.1-dev"
+ADDIT_FLUX_USE_INPAINT = True             # constrain generation to the insertion bbox before segmentation
+ADDIT_FLUX_TRUE_CFG_SCALE = 1.0            # >1 enables negative_prompt CFG in recent diffusers FLUX pipelines
+ADDIT_FLUX_MASK_PADDING_RATIO = 0.10       # small context around bbox for inpaint mask
+ADDIT_FLUX_MASK_BLUR_PX = 0.0              # keep generated region bounded; final cutout handles edges
+
 ADDIT_BLEND_FEATHER_LATENT  = 3           # tighter edge; less source overwrite inside the person region
 ADDIT_BLEND_START_RATIO     = 0.0         # blending active from this step ratio
 ADDIT_BLEND_END_RATIO       = 1.0        # blending stops at this step ratio (higher preserves background longer)
@@ -50,12 +57,14 @@ ADDIT_FINAL_PIXEL_COMPOSITE = True        # restore original pixels outside inse
 ADDIT_FINAL_COMPOSITE_MODE  = "bbox"      # bbox = exact background outside bbox; silhouette = tighter person mask
 ADDIT_FINAL_COMPOSITE_FEATHER_PX = 0      # 0 preserves outside pixels exactly; >0 softens the boundary
 ADDIT_FINAL_PERSON_CUTOUT = True          # after Add-it generation, cut detected person and paste onto source
-ADDIT_PERSON_CUTOUT_CONF = 0.15           # YOLO-seg confidence for extracting generated person
-ADDIT_PERSON_CUTOUT_MASK_THRESHOLD = 48    # keep weak lower-body mask pixels without falling back to bbox paste
-ADDIT_PERSON_CUTOUT_DILATE_PX = 2          # keep accessories/feet while still preserving background outside the mask
-ADDIT_PERSON_CUTOUT_FEATHER_PX = 0.45      # very thin edge blend so the person does not look like a sticker
-ADDIT_PERSON_CUTOUT_EDGE_MIN_ALPHA = 24    # alpha below this becomes background
-ADDIT_PERSON_CUTOUT_EDGE_FULL_ALPHA = 96   # alpha above this keeps generated person fully
+ADDIT_PERSON_CUTOUT_CONF = 0.18           # YOLO-seg confidence for extracting generated person
+ADDIT_PERSON_CUTOUT_MASK_THRESHOLD = 92    # tighter silhouette; discard generated-background fringe
+ADDIT_PERSON_CUTOUT_DILATE_PX = 0          # do not grow the person mask beyond the segmentation edge
+ADDIT_PERSON_CUTOUT_FEATHER_PX = 0.25      # sub-pixel edge blend only
+ADDIT_PERSON_CUTOUT_EDGE_MIN_ALPHA = 44    # alpha below this becomes background
+ADDIT_PERSON_CUTOUT_EDGE_FULL_ALPHA = 150  # alpha above this keeps generated person fully
+ADDIT_PERSON_CUTOUT_RECOVER_WEAK_LOWER_BODY = False
+ADDIT_PERSON_CUTOUT_BBOX_EXPANSION_RATIO = 1.08  # clip selected mask close to planned insertion region
 ADDIT_PERSON_CUTOUT_FALLBACK_TO_BBOX = False  # never paste the whole insert bbox when segmentation fails
 ADDIT_PERSON_CUTOUT_CONTRAST_BOOST = 1.18  # make added person less washed out before masked paste
 ADDIT_PERSON_CUTOUT_SHARPNESS_BOOST = 1.35 # sharpen only generated person pixels; source BG is untouched
@@ -73,10 +82,10 @@ ADDIT_TRANSFORMER_DEVICE = "cuda:1"
 # ═══════════════════════════════════════════════════════════════════════════
 # 4. Generation Defaults (can be overridden per-variant)
 # ═══════════════════════════════════════════════════════════════════════════
-ADDIT_NUM_INFERENCE_STEPS = 36
-ADDIT_GUIDANCE_SCALE      = 7.8
+ADDIT_NUM_INFERENCE_STEPS = 28
+ADDIT_GUIDANCE_SCALE      = 3.5
 ADDIT_SEED                = 42
-ADDIT_FALLBACK_TO_NATIVE_IMG2IMG = True  # keep smoke runs useful if custom denoise fails
+ADDIT_FALLBACK_TO_NATIVE_IMG2IMG = False # flux is the primary generator for this experimental flow
 ADDIT_ADAPTIVE_RETRY_ENABLED = True      # adapt prompt/params after each rejection reason
 ADDIT_ADAPTIVE_MAX_STRENGTH_DELTA = 0.14
 ADDIT_ADAPTIVE_MAX_GUIDANCE_DELTA = 1.20
@@ -84,12 +93,12 @@ ADDIT_ADAPTIVE_MAX_EXTRA_STEPS = 12
 
 # Per-variant overrides (mirroring parent VARIANT_PROFILE structure).
 ADDIT_VARIANT_OVERRIDES = {
-    "add_single_pedestrian":   {"strength": 0.82, "guidance": 7.8, "steps": 42},
-    "add_two_pedestrians":     {"strength": 0.84, "guidance": 7.9, "steps": 42},
-    "add_small_group":         {"strength": 0.86, "guidance": 8.0, "steps": 44},
-    "add_occluded_pedestrian": {"strength": 0.84, "guidance": 7.8, "steps": 42},
-    "add_distant_pedestrian":  {"strength": 0.78, "guidance": 7.6, "steps": 40},
-    "add_near_pedestrian":     {"strength": 0.86, "guidance": 8.3, "steps": 44},
+    "add_single_pedestrian":   {"strength": 0.88, "guidance": 3.5, "steps": 28},
+    "add_two_pedestrians":     {"strength": 0.90, "guidance": 3.5, "steps": 30},
+    "add_small_group":         {"strength": 0.92, "guidance": 3.5, "steps": 30},
+    "add_occluded_pedestrian": {"strength": 0.90, "guidance": 3.5, "steps": 30},
+    "add_distant_pedestrian":  {"strength": 0.84, "guidance": 3.3, "steps": 28},
+    "add_near_pedestrian":     {"strength": 0.92, "guidance": 3.7, "steps": 30},
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
