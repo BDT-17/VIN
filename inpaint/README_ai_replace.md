@@ -69,3 +69,35 @@ Expected:
 ```text
 background preservation ok
 ```
+
+## Full Smoke Test
+
+Dry-run wiring test:
+
+```bash
+python inpaint/smoke_runner.py --input-dir /path/to/images --output-dir ./ai_replace_smoke --num-images 20 --no-yolo
+```
+
+Kaggle/model smoke test with repo update first:
+
+```bash
+python inpaint/smoke_runner.py \
+  --git-pull \
+  --input-dir /kaggle/input/your-dataset \
+  --output-dir /kaggle/working/ai_replace_smoke \
+  --num-images 20 \
+  --load-model
+```
+
+Outputs:
+
+- `manifest.jsonl`
+- `manifest.csv`
+- `metrics/metrics_summary.json`
+- `metrics/metrics_summary.csv`
+- `previews/*_original.png`
+- `previews/*_mask.png`
+- `previews/*_generated_raw.png`
+- `previews/*_object_mask.png`
+- `previews/*_harmonized.png`
+- `previews/*_diff_outside_mask.png`
