@@ -1,7 +1,8 @@
-"""Pokecut-style AI Replace flow for VIN inpainting experiments."""
+"""Pokecut-style AI Replace flow for VIN inpainting experiments.
 
-from .sd35_ai_replace import AIReplacePipeline, AIReplaceResult, ValidationResult
-from .sd35_mask_refinement import AIReplaceMaskBundle, bbox_to_mask, refine_mask
+Heavy modules are intentionally not imported here so config/docs can be read in
+minimal environments without numpy/torch installed.
+"""
 
 __all__ = [
     "AIReplacePipeline",

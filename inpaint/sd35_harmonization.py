@@ -69,6 +69,35 @@ def _stats(image: np.ndarray, mask: np.ndarray):
     return pixels.mean(axis=0), pixels.std(axis=0) + 1e-6
 
 
+def _local_patch_color_match(original: np.ndarray, composite: np.ndarray, object_mask: np.ndarray, config) -> np.ndarray:
+    if not getattr(config, "AI_REPLACE_LOCAL_COLOR_MATCH", True):
+        return composite
+    patch_size = max(4, int(getattr(config, "AI_REPLACE_LOCAL_PATCH_SIZE", 16)))
+    strength = min(float(getattr(config, "AI_REPLACE_LOCAL_COLOR_STRENGTH", 0.10)), 0.15)
+    active = object_mask > 0.5
+    if not np.any(active):
+        return composite
+    height, width = active.shape
+    out = composite.copy()
+    ring = _ring_mask(object_mask, outer=patch_size * 2, inner=max(2, patch_size // 2))
+    for y in range(0, height, patch_size):
+        for x in range(0, width, patch_size):
+            ys = slice(y, min(height, y + patch_size))
+            xs = slice(x, min(width, x + patch_size))
+            obj_patch = active[ys, xs]
+            if not np.any(obj_patch):
+                continue
+            ring_patch = ring[ys, xs] > 0.05
+            if not np.any(ring_patch):
+                continue
+            bg_mean = original[ys, xs][ring_patch].mean(axis=0)
+            obj_mean = composite[ys, xs][obj_patch].mean(axis=0)
+            shift = np.clip(bg_mean - obj_mean, -18.0, 18.0)
+            patch = out[ys, xs]
+            patch[obj_patch] = composite[ys, xs][obj_patch] + shift * strength
+            out[ys, xs] = patch
+    return out
+
 def _blend_layer(composite: np.ndarray, original: np.ndarray, mask: np.ndarray, max_alpha: float) -> np.ndarray:
     alpha = np.clip(mask[..., None] * float(max_alpha), 0.0, float(max_alpha))
     return composite * (1.0 - alpha) + original * alpha
@@ -115,6 +144,7 @@ def harmonize_object_with_background(original_image, generated_composite, object
         transferred = (composite - obj_mean) * (bg_std / obj_std) + bg_mean
         layer = np.clip(mask_layers.soft_boundary + mask_layers.fine_detail, 0.0, 1.0)[..., None] * strength
         composite = composite * (1.0 - layer) + transferred * layer
+    composite = _local_patch_color_match(original, composite, obj, config)
     composite = _blend_layer(composite, original, mask_layers.core, config.MAX_CORE_BLEND)
     composite = _blend_layer(composite, original, mask_layers.soft_boundary, config.MAX_SOFT_BOUNDARY_BLEND)
     composite = _blend_layer(composite, original, mask_layers.fine_detail, config.MAX_FINE_EDGE_BLEND)

@@ -11,7 +11,7 @@ from typing import Optional, Tuple
 
 import json
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter
 
 from .config import AIReplaceConfig, DEFAULT_CONFIG
 from .sd35_mask_refinement import (
@@ -90,6 +90,7 @@ class AIReplacePipeline:
         self.config = config
         self.pipe = pipe
         self.device = device
+        self.last_conditioning_meta = {}
 
     @classmethod
     def from_pretrained(cls, config: AIReplaceConfig = DEFAULT_CONFIG, device: str = "cuda"):
@@ -116,7 +117,77 @@ class AIReplacePipeline:
         raw = bbox_to_mask((image.height, image.width), bbox)
         return refine_mask(raw, bbox, self.config)
 
+    def _classify_scene(self, image: Image.Image, bbox: tuple) -> str:
+        _x1, y1, _x2, y2 = [int(round(v)) for v in bbox]
+        y_center = ((y1 + y2) / 2.0) / max(1, image.height)
+        return "urban street scene" if y_center > 0.58 else "outdoor scene"
+
+    def _classify_lighting(self, image: Image.Image, bbox: tuple) -> str:
+        crop = image.crop(tuple(int(round(v)) for v in bbox)).convert("L")
+        arr = np.asarray(crop, dtype=np.float32)
+        mean = float(arr.mean()) if arr.size else 128.0
+        if mean < 75:
+            return "low light"
+        if mean > 180:
+            return "bright daylight"
+        return "natural lighting"
+
+    def _build_dynamic_prompt(self, image: Image.Image, bbox: tuple, base_prompt: str) -> str:
+        if not self.config.AI_REPLACE_DYNAMIC_PROMPT:
+            return base_prompt
+        subject = base_prompt
+        scene = self._classify_scene(image, bbox)
+        style = "realistic street photo"
+        lighting = self._classify_lighting(image, bbox) if self.config.AI_REPLACE_LIGHTING_CONDITIONING else "natural lighting"
+        camera = "matching camera perspective"
+        if not self.config.AI_REPLACE_GOLDEN_FORMULA:
+            return f"{subject}, {lighting}, {camera}"
+        return self.config.AI_REPLACE_PROMPT_TEMPLATE.format(
+            subject=subject,
+            scene=scene,
+            style=style,
+            lighting=lighting,
+            camera=camera,
+        )
+
+    def _compute_depth_conditioning(self, image: Image.Image) -> Image.Image:
+        """Compute a depth-conditioning image; MiDaS if available, luminance fallback otherwise."""
+        try:
+            import torch
+            midas = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True)
+            transforms = torch.hub.load("intel-isl/MiDaS", "transforms", trust_repo=True)
+            device = self.device if str(self.device).startswith("cuda") else "cpu"
+            midas.to(device).eval()
+            batch = transforms.small_transform(np.asarray(image.convert("RGB"))).to(device)
+            with torch.no_grad():
+                prediction = midas(batch)
+                prediction = torch.nn.functional.interpolate(
+                    prediction.unsqueeze(1),
+                    size=image.size[::-1],
+                    mode="bicubic",
+                    align_corners=False,
+                ).squeeze()
+            depth = prediction.detach().cpu().numpy()
+            source = "midas"
+        except Exception:
+            depth = np.asarray(image.convert("L"), dtype=np.float32)
+            source = "luminance_fallback"
+        depth = depth.astype(np.float32)
+        depth = (depth - depth.min()) / max(1e-6, float(depth.max() - depth.min()))
+        self.last_conditioning_meta["depth_conditioning_enabled"] = bool(self.config.AI_REPLACE_DEPTH_CONDITIONING)
+        self.last_conditioning_meta["depth_conditioning_source"] = source
+        return Image.fromarray(np.clip(depth * 255.0, 0, 255).astype(np.uint8), mode="L")
     def _run_inpainting(self, image: Image.Image, mask_bundle: AIReplaceMaskBundle, prompt: str, negative_prompt: str, seed: int) -> Image.Image:
+        self.last_conditioning_meta = {}
+        if self.config.AI_REPLACE_DEPTH_CONDITIONING:
+            depth_map = self._compute_depth_conditioning(image)
+            self.last_conditioning_meta["depth_map_size"] = depth_map.size
+            self.last_conditioning_meta["depth_controlnet_applied"] = False
+        if self.config.AI_REPLACE_LIGHTING_INJECT_PROMPT:
+            prompt = self._build_dynamic_prompt(image, mask_bundle.bbox, prompt)
+        self.last_conditioning_meta["effective_prompt"] = prompt
+        self.last_conditioning_meta["num_variants"] = int(self.config.AI_REPLACE_NUM_VARIANTS)
+        self.last_conditioning_meta["model_type"] = self.config.AI_REPLACE_MODEL_TYPE
         if self.pipe is None:
             # Deterministic no-model fallback for unit tests and dry-run wiring.
             generated = image.copy()
@@ -200,16 +271,37 @@ class AIReplacePipeline:
 
     def validate_ai_replace_output(self, original, composite, obj_result, mask_bundle, ghost_result) -> ValidationResult:
         diff = outside_mask_diff(original, composite, mask_bundle)
+        image_area = max(1, original.width * original.height)
+        object_area_ratio = obj_result.object_mask_area / image_area
+        shadow_bleed_diff = self._shadow_bleed_diff(original, composite, mask_bundle)
         checks = {
             "person_exists": obj_result.reject_reason is None,
             "person_inside_mask": obj_result.object_mask_inside_ratio >= self.config.MIN_OBJECT_INSIDE_RATIO,
+            "object_area_min": object_area_ratio >= self.config.AI_REPLACE_MIN_OBJECT_AREA_RATIO,
+            "object_area_max": object_area_ratio <= self.config.AI_REPLACE_MAX_OBJECT_AREA_RATIO,
             "person_opaque": ghost_result.opacity_score >= self.config.MIN_OPACITY_SCORE,
             "detector_ok": ghost_result.conf_drop <= self.config.MAX_DETECTOR_CONF_DROP,
             "background_preserved": diff <= self.config.MAX_OUTSIDE_MASK_DIFF,
+            "shadow_bleeding_ok": (
+                not self.config.AI_REPLACE_CHECK_SHADOW_BLEEDING
+                or shadow_bleed_diff <= self.config.AI_REPLACE_MAX_SHADOW_BLEED_DIFF
+            ),
         }
         accepted = all(checks.values())
         reject_reason = next((key for key, value in checks.items() if not value), None)
         return ValidationResult(accepted=accepted, checks=checks, reject_reason=reject_reason, outside_mask_diff=round(float(diff), 6))
+
+    def _shadow_bleed_diff(self, original: Image.Image, composite: Image.Image, mask_bundle: AIReplaceMaskBundle) -> float:
+        mask = mask_bundle.to_pil().resize(original.size, Image.NEAREST)
+        ring = mask.filter(ImageFilter.MaxFilter(15))
+        ring_arr = np.asarray(ring, dtype=np.float32) / 255.0
+        hard_arr = np.asarray(mask, dtype=np.float32) / 255.0
+        shadow_ring = (ring_arr > 0.1) & (hard_arr <= 0.5)
+        if not np.any(shadow_ring):
+            return 0.0
+        orig = np.asarray(original.convert("RGB"), dtype=np.float32)
+        comp = np.asarray(composite.convert("RGB").resize(original.size), dtype=np.float32)
+        return float(np.mean(np.abs(comp[shadow_ring] - orig[shadow_ring])))
 
     def run(self, image: Image.Image, bbox: tuple, seed: int = 42, yolo_segmenter=None) -> AIReplaceResult:
         image = image.convert("RGB").resize((self.config.AI_REPLACE_RESOLUTION, self.config.AI_REPLACE_RESOLUTION))
@@ -250,6 +342,7 @@ class AIReplacePipeline:
             "object_mask_inside_ratio": obj.object_mask_inside_ratio,
             "object_bbox_inside_ratio": obj.object_bbox_inside_ratio,
             "outside_mask_diff": validation.outside_mask_diff,
+            **self.last_conditioning_meta,
             "hard_restore_enabled": bool(self.config.AI_REPLACE_HARD_RESTORE_OUTSIDE_MASK),
             "color_transfer_strength": harm.color_transfer_strength,
             "max_core_blend": harm.max_core_blend,
@@ -268,6 +361,7 @@ class AIReplacePipeline:
             "background_preservation_score": round(float(bg_pres_score), 4),
             "ai_replace_quality_score": round(float(quality), 4),
             "accepted": bool(validation.accepted),
+            "validation_checks": validation.checks,
             "reject_reason": validation.reject_reason or obj.reject_reason or ghost.reject_reason or "",
             "reject_stage": "" if validation.accepted else "validation",
             "seed": int(seed),
