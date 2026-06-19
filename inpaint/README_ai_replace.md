@@ -1,0 +1,71 @@
+# AI Replace Flow
+
+Standalone Pokecut-style inpainting flow for VIN experiments. This lives under
+`inpaint/` and does not modify the rollback-era V5 pipeline.
+
+## What It Does
+
+1. Builds an insertion mask from a bbox.
+2. Refines hard and soft masks.
+3. Runs SD inpainting when a diffusers pipeline is available.
+4. Restores original pixels outside the hard mask after generation.
+5. Extracts a person mask through YOLO when provided, or uses a dry-run fallback.
+6. Applies layer-aware harmonization.
+7. Runs ghost/background validation.
+8. Emits manifest-ready metrics.
+
+The invariant is simple:
+
+```text
+Generated background is untrusted.
+Original background is trusted.
+Pixels outside the hard insertion mask are restored from the original image.
+```
+
+## Files
+
+- `config.py`: local AI Replace config.
+- `sd35_mask_refinement.py`: bbox to mask, dilation, blur, hard restore.
+- `sd35_harmonization.py`: mask layers, color transfer, contact shadow.
+- `sd35_ghost_detection.py`: opacity, contrast and seam scoring.
+- `sd35_ai_replace.py`: orchestration class.
+- `test_background_preservation.py`: standalone hard-restore test.
+
+## Minimal Dry Run
+
+```python
+from PIL import Image
+from inpaint.sd35_ai_replace import AIReplacePipeline
+
+image = Image.open("input.png").convert("RGB")
+pipe = AIReplacePipeline(pipe=None, device="cpu")
+result = pipe.run(image, bbox=(180, 180, 300, 430), seed=42)
+print(result.manifest_row)
+```
+
+## Real Inpainting
+
+```python
+from inpaint.sd35_ai_replace import AIReplacePipeline
+
+pipe = AIReplacePipeline.from_pretrained(device="cuda")
+result = pipe.run(image, bbox=(180, 180, 300, 430), seed=42, yolo_segmenter=yolo)
+AIReplacePipeline.save_result(result, "ai_replace_outputs", stem="sample_0001")
+```
+
+## Dependencies
+
+Required at runtime: 
+umpy, Pillow. Real inpainting also needs 	orch, diffusers, and optionally ultralytics for YOLO segmentation.
+
+## Verification
+
+```bash
+python inpaint/test_background_preservation.py
+```
+
+Expected:
+
+```text
+background preservation ok
+```
