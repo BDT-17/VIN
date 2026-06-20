@@ -99,11 +99,28 @@ def build_caption(path, bucket, caption_map, metadata=None, include_weather=True
 
 
 def build_generation_prompt(record, variant):
-    return PRESERVATION_PROMPT
+    variant_prompt = VARIANT_PROMPTS.get(variant, VARIANT_PROMPTS["add_single_pedestrian"])
+    scene_prompt = SCENE_PROMPTS.get(getattr(record, "bucket", None), BASE_CAPTION)
+    return (
+        f"{scene_prompt}. Insert {variant_prompt}. "
+        "Match scene perspective, nearby pedestrian scale, lighting and traffic-camera realism. "
+        "Preserve road, vehicles, buildings and background. "
+        "No ghost, silhouette, outline, transparency or oversized human."
+    )
 
 
 def build_variant_negative_prompt(variant):
-    return NEGATIVE_PROMPT
+    variant_negative_prompts = {
+        "add_two_pedestrians": "single person only, one pedestrian only",
+        "add_small_group": "single person only, one pedestrian only, two people only",
+        "add_occluded_pedestrian": "fully unobstructed person, floating in front of occluder",
+        "add_distant_pedestrian": "closeup person, foreground pedestrian, oversized distant human",
+        "add_near_pedestrian": "tiny person, distant pedestrian, undersized foreground human",
+    }
+    extra_negative_prompt = variant_negative_prompts.get(variant)
+    if not extra_negative_prompt:
+        return NEGATIVE_PROMPT
+    return f"{NEGATIVE_PROMPT}, {extra_negative_prompt}"
 
 
 def is_source_image(path):
