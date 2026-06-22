@@ -57,7 +57,7 @@ AIReplacePipeline.save_result(result, "ai_replace_outputs", stem="sample_0001")
 
 Required at runtime: numpy, Pillow. Real inpainting also needs torch, diffusers, and optionally ultralytics for YOLO segmentation.
 
-Default inpainting model: `sd2-community/stable-diffusion-2-inpainting`. The old `stabilityai/stable-diffusion-2-inpainting` repo may return 404 on Hugging Face; set `AI_REPLACE_MODEL_ID=/path/to/local/model` or another accessible repo if needed.
+Default inpainting model: `sd2-community/stable-diffusion-2-inpainting`. The old `stabilityai/stable-diffusion-2-inpainting` repo may return 404 on Hugging Face and is automatically remapped to the community mirror; set `AI_REPLACE_MODEL_ID=/path/to/local/model` or another accessible repo if needed.
 
 ## Verification
 

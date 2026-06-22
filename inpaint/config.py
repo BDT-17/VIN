@@ -71,7 +71,6 @@ class AIReplaceConfig:
     AI_REPLACE_MODEL_TYPE: str = "sd2_inpainting"
     MODEL_ID: str = "sd2-community/stable-diffusion-2-inpainting"
     MODEL_ID_FALLBACKS: tuple[str, ...] = (
-        "stabilityai/stable-diffusion-2-inpainting",
         "runwayml/stable-diffusion-inpainting",
     )
     TORCH_DTYPE: str = "float16"

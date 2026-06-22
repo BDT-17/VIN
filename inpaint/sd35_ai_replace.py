@@ -101,16 +101,22 @@ class AIReplacePipeline:
         except Exception as exc:  # pragma: no cover - environment dependent
             raise RuntimeError("diffusers and torch are required to load the AI Replace model") from exc
         dtype = torch.float16 if config.TORCH_DTYPE == "float16" else torch.float32
+        legacy_model_ids = {
+            "stabilityai/stable-diffusion-2-inpainting": "sd2-community/stable-diffusion-2-inpainting",
+        }
         requested_model = os.getenv("AI_REPLACE_MODEL_ID", config.MODEL_ID)
+        requested_model = legacy_model_ids.get(requested_model, requested_model)
         fallback_models = getattr(config, "MODEL_ID_FALLBACKS", ())
         model_ids = []
         for model_id in (requested_model, *fallback_models):
+            model_id = legacy_model_ids.get(model_id, model_id)
             if model_id and model_id not in model_ids:
                 model_ids.append(model_id)
 
         errors = []
         for model_id in model_ids:
             try:
+                print(f"Loading AI Replace inpainting model: {model_id}")
                 pipe = StableDiffusionInpaintPipeline.from_pretrained(model_id, torch_dtype=dtype)
                 break
             except Exception as exc:  # pragma: no cover - depends on Hub/cache state
