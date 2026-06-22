@@ -79,6 +79,21 @@ def _bbox_inside_ratio(bbox, container_bbox) -> float:
     return float(_bbox_intersection(bbox, container_bbox) / max(1.0, _bbox_area(bbox)))
 
 
+def _bbox_touches_image_margin(bbox, image_size, margin_ratio: float = 0.02) -> bool:
+    if bbox is None:
+        return True
+    width, height = image_size
+    margin = int(round(max(width, height) * margin_ratio))
+    x1, y1, x2, y2 = [int(round(v)) for v in bbox]
+    return x1 <= margin or y1 <= margin or x2 >= width - margin or y2 >= height - margin
+
+
+def _bbox_height_ratio(bbox, image_height: int) -> float:
+    if bbox is None:
+        return 0.0
+    return max(0.0, float(bbox[3] - bbox[1]) / max(1.0, float(image_height)))
+
+
 def _mask_bbox(mask: np.ndarray):
     ys, xs = np.where(mask > 0.5)
     if len(xs) == 0 or len(ys) == 0:
@@ -360,11 +375,14 @@ class AIReplacePipeline:
         image_area = max(1, original.width * original.height)
         object_area_ratio = obj_result.object_mask_area / image_area
         shadow_bleed_diff = self._shadow_bleed_diff(original, composite, mask_bundle)
+        object_height_ratio = _bbox_height_ratio(obj_result.object_bbox, original.height)
         checks = {
             "person_exists": obj_result.reject_reason is None,
             "person_inside_mask": obj_result.object_mask_inside_ratio >= self.config.MIN_OBJECT_INSIDE_RATIO,
             "object_area_min": object_area_ratio >= self.config.AI_REPLACE_MIN_OBJECT_AREA_RATIO,
             "object_area_max": object_area_ratio <= self.config.AI_REPLACE_MAX_OBJECT_AREA_RATIO,
+            "object_height_max": object_height_ratio <= 0.48,
+            "object_not_cropped": not _bbox_touches_image_margin(obj_result.object_bbox, original.size, margin_ratio=0.018),
             "person_opaque": ghost_result.opacity_score >= self.config.MIN_OPACITY_SCORE,
             "person_contrast": ghost_result.contrast_score >= self.config.MIN_CONTRAST_SCORE,
             "detector_ok": ghost_result.conf_drop <= self.config.MAX_DETECTOR_CONF_DROP,
@@ -433,6 +451,8 @@ class AIReplacePipeline:
             "object_bbox": obj.object_bbox,
             "object_mask_area": obj.object_mask_area,
             "object_area_ratio": round(float(obj.object_mask_area / max(1, self.config.AI_REPLACE_RESOLUTION * self.config.AI_REPLACE_RESOLUTION)), 6),
+            "object_height_ratio": round(float(_bbox_height_ratio(obj.object_bbox, self.config.AI_REPLACE_RESOLUTION)), 6),
+            "object_touches_margin": bool(_bbox_touches_image_margin(obj.object_bbox, (self.config.AI_REPLACE_RESOLUTION, self.config.AI_REPLACE_RESOLUTION), margin_ratio=0.018)),
             "object_mask_inside_ratio": obj.object_mask_inside_ratio,
             "object_bbox_inside_ratio": obj.object_bbox_inside_ratio,
             "outside_mask_diff": validation.outside_mask_diff,

@@ -15,7 +15,7 @@ class AIReplaceConfig:
 
     AI_REPLACE_HARD_RESTORE_OUTSIDE_MASK: bool = True
     AI_REPLACE_SOFT_BORDER_PX: int = 4
-    AI_REPLACE_MASK_EXPAND_PX: int = 12
+    AI_REPLACE_MASK_EXPAND_PX: int = 6
     AI_REPLACE_MASK_BLUR_PX: int = 3
 
     AI_REPLACE_DEPTH_CONDITIONING: bool = False
@@ -28,7 +28,7 @@ class AIReplaceConfig:
 
     AI_REPLACE_NUM_VARIANTS: int = 3
 
-    AI_REPLACE_STRENGTH: float = 0.95
+    AI_REPLACE_STRENGTH: float = 0.88
     AI_REPLACE_GUIDANCE_SCALE: float = 6.8
     AI_REPLACE_STEPS: int = 36
     AI_REPLACE_RESOLUTION: int = 512
@@ -36,12 +36,13 @@ class AIReplaceConfig:
     AI_REPLACE_OBJECT_CLASS: str = "person"
     AI_REPLACE_PROMPT: str = (
         "a single realistic full-body pedestrian standing centered inside the masked area, "
-        "opaque person, visible head torso arms legs shoes, natural street photo, "
+        "medium distance, not closeup, full head and shoes visible, opaque person, "
+        "visible head torso arms legs shoes, natural street photo, "
         "matching camera perspective and lighting"
     )
     AI_REPLACE_NEGATIVE_PROMPT: str = (
-        "transparent, ghost, silhouette, cropped, missing limbs, "
-        "giant, closeup, floating, bad perspective, hard seam, "
+        "transparent, ghost, silhouette, cropped, cropped head, cropped feet, half body, missing limbs, "
+        "giant, oversized person, closeup, floating, bad perspective, hard seam, "
         "halo, blurry, duplicate, text, watermark"
     )
 
@@ -57,7 +58,7 @@ class AIReplaceConfig:
 
     MIN_OBJECT_INSIDE_RATIO: float = 0.65
     AI_REPLACE_MIN_OBJECT_AREA_RATIO: float = 0.015
-    AI_REPLACE_MAX_OBJECT_AREA_RATIO: float = 0.40
+    AI_REPLACE_MAX_OBJECT_AREA_RATIO: float = 0.22
     AI_REPLACE_CHECK_SHADOW_BLEEDING: bool = True
     AI_REPLACE_MAX_SHADOW_BLEED_DIFF: float = 2.0
     MIN_OPACITY_SCORE: float = 0.35

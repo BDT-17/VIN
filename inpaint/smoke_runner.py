@@ -42,11 +42,12 @@ def list_source_images(input_dir: Path, limit: int | None = None) -> list[Path]:
 
 def default_bbox(image: Image.Image) -> tuple[int, int, int, int]:
     w, h = image.size
-    # Give the inpainting model enough canvas for a full-body pedestrian.
-    box_h = int(h * 0.56)
-    box_w = int(box_h * 0.46)
+    # Keep the insertion box large enough for a full body, but not so large that
+    # SD3.5 fills the foreground with an oversized/cropped pedestrian.
+    box_h = int(h * 0.42)
+    box_w = int(box_h * 0.36)
     cx = int(w * 0.52)
-    y2 = int(h * 0.94)
+    y2 = int(h * 0.90)
     return (max(0, cx - box_w // 2), max(0, y2 - box_h), min(w, cx + box_w // 2), min(h, y2))
 
 
