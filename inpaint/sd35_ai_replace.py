@@ -85,6 +85,22 @@ def _mask_bbox(mask: np.ndarray):
         return None
     return (int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1))
 
+def _scale_bbox_to_size(bbox, source_size, target_size):
+    src_w, src_h = source_size
+    dst_w, dst_h = target_size
+    if src_w <= 0 or src_h <= 0:
+        return tuple(int(round(v)) for v in bbox)
+    sx = float(dst_w) / float(src_w)
+    sy = float(dst_h) / float(src_h)
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    return (
+        int(round(x1 * sx)),
+        int(round(y1 * sy)),
+        int(round(x2 * sx)),
+        int(round(y2 * sy)),
+    )
+
+
 
 class AIReplacePipeline:
     def __init__(self, config: AIReplaceConfig = DEFAULT_CONFIG, pipe=None, device: str = "cuda"):
@@ -335,9 +351,15 @@ class AIReplacePipeline:
         return float(np.mean(np.abs(comp[shadow_ring] - orig[shadow_ring])))
 
     def run(self, image: Image.Image, bbox: tuple, seed: int = 42, yolo_segmenter=None) -> AIReplaceResult:
-        image = image.convert("RGB").resize((self.config.AI_REPLACE_RESOLUTION, self.config.AI_REPLACE_RESOLUTION))
-        mask_bundle = self.build_mask_bundle(image, bbox)
+        original_size = image.size
+        target_size = (self.config.AI_REPLACE_RESOLUTION, self.config.AI_REPLACE_RESOLUTION)
+        scaled_bbox = _scale_bbox_to_size(bbox, original_size, target_size)
+        image = image.convert("RGB").resize(target_size)
+        mask_bundle = self.build_mask_bundle(image, scaled_bbox)
         raw = self._run_inpainting(image, mask_bundle, self.config.AI_REPLACE_PROMPT, self.config.AI_REPLACE_NEGATIVE_PROMPT, seed)
+        self.last_conditioning_meta["source_image_size"] = original_size
+        self.last_conditioning_meta["working_image_size"] = target_size
+        self.last_conditioning_meta["source_bbox"] = tuple(int(round(v)) for v in bbox)
         obj = self._extract_object_mask(raw, mask_bundle, yolo_segmenter=yolo_segmenter)
         if obj.object_mask is None:
             object_mask = mask_bundle.hard_mask
@@ -370,6 +392,7 @@ class AIReplacePipeline:
             "mask_area_ratio": round(float(mask_bundle.mask_area_ratio), 6),
             "object_bbox": obj.object_bbox,
             "object_mask_area": obj.object_mask_area,
+            "object_area_ratio": round(float(obj.object_mask_area / max(1, self.config.AI_REPLACE_RESOLUTION * self.config.AI_REPLACE_RESOLUTION)), 6),
             "object_mask_inside_ratio": obj.object_mask_inside_ratio,
             "object_bbox_inside_ratio": obj.object_bbox_inside_ratio,
             "outside_mask_diff": validation.outside_mask_diff,

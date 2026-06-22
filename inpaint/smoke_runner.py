@@ -86,6 +86,15 @@ def summarize_rows(rows: list[dict], output_dir: Path) -> dict:
     total = len(rows)
     accepted = sum(1 for row in rows if row.get("accepted") is True)
     reject_counts = Counter(row.get("reject_reason") or "" for row in rows if row.get("accepted") is not True)
+    failed_check_counts = Counter()
+    for row in rows:
+        checks = row.get("validation_checks") or {}
+        if isinstance(checks, str):
+            try:
+                checks = json.loads(checks)
+            except json.JSONDecodeError:
+                checks = {}
+        failed_check_counts.update(key for key, value in checks.items() if value is False)
 
     def mean(key: str) -> float:
         values = [float(row[key]) for row in rows if row.get(key) not in ("", None)]
@@ -96,6 +105,7 @@ def summarize_rows(rows: list[dict], output_dir: Path) -> dict:
         "num_accepted": accepted,
         "accept_rate": round(accepted / max(1, total), 6),
         "reject_reason_counts": dict(reject_counts),
+        "failed_validation_check_counts": dict(failed_check_counts),
         "mean_outside_mask_diff": mean("outside_mask_diff"),
         "mean_object_inside_ratio": mean("object_mask_inside_ratio"),
         "mean_background_preservation_score": mean("background_preservation_score"),
@@ -149,7 +159,13 @@ def run_smoke(input_dir: Path, output_dir: Path, num_images: int = 20, seed: int
         row = dict(result.manifest_row)
         row.update({"source_path": str(image_path), "output_path": str(paths["previews"] / f"{stem}_harmonized.png"), "preview_stem": stem})
         rows.append(row)
-        print(f"[{index + 1}/{len(images)}] accepted={row['accepted']} reject={row.get('reject_reason', '')} source={image_path.name}")
+        failed_checks = [key for key, value in row.get("validation_checks", {}).items() if value is False]
+        print(
+            f"[{index + 1}/{len(images)}] accepted={row['accepted']} "
+            f"reject={row.get('reject_reason', '')} failed_checks={failed_checks} "
+            f"inside={row.get('object_mask_inside_ratio')} area={row.get('object_area_ratio')} "
+            f"source={image_path.name}"
+        )
     write_manifest(rows, output_dir)
     summary = summarize_rows(rows, output_dir)
     print("AI Replace smoke summary:")
