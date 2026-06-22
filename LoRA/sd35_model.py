@@ -53,6 +53,8 @@ def lora_metadata():
         "lora_adapter_name": str(LORA_ADAPTER_NAME),
         "lora_scale": float(LORA_SCALE),
         "lora_fuse": bool(LORA_FUSE),
+        "lora_trigger_token": str(LORA_TRIGGER_TOKEN),
+        "lora_prompt_prefix": str(LORA_PROMPT_PREFIX),
     }
 
 
@@ -70,16 +72,16 @@ def apply_lora_adapter(pipe):
     if LORA_WEIGHT_NAME:
         load_kwargs["weight_name"] = LORA_WEIGHT_NAME
     pipe.load_lora_weights(str(LORA_PATH), **load_kwargs)
-    if hasattr(pipe, "set_adapters"):
-        pipe.set_adapters([LORA_ADAPTER_NAME], adapter_weights=[float(LORA_SCALE)])
-    elif float(LORA_SCALE) != 1.0:
-        raise RuntimeError(
-            "LORA_SCALE requires set_adapters() support in the active diffusers pipeline."
-        )
     if LORA_FUSE:
         if not hasattr(pipe, "fuse_lora"):
             raise RuntimeError("LORA_FUSE=True but the pipeline does not expose fuse_lora().")
         pipe.fuse_lora(adapter_names=[LORA_ADAPTER_NAME], lora_scale=float(LORA_SCALE))
+    elif hasattr(pipe, "set_adapters"):
+        pipe.set_adapters([LORA_ADAPTER_NAME], adapter_weights=[float(LORA_SCALE)])
+    elif float(LORA_SCALE) != 1.0:
+        raise RuntimeError(
+            "LORA_SCALE requires set_adapters() support unless LORA_FUSE=True."
+        )
     print(
         f"Loaded LoRA adapter {LORA_ADAPTER_NAME!r} from {LORA_PATH} "
         f"with scale={float(LORA_SCALE):.3f}"

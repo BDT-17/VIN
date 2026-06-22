@@ -98,11 +98,20 @@ def build_caption(path, bucket, caption_map, metadata=None, include_weather=True
     return BASE_CAPTION
 
 
+def lora_prompt_prefix():
+    if not LORA_ENABLED:
+        return ""
+    parts = [str(value).strip() for value in (LORA_TRIGGER_TOKEN, LORA_PROMPT_PREFIX) if str(value).strip()]
+    return ", ".join(parts)
+
+
 def build_generation_prompt(record, variant):
     variant_prompt = VARIANT_PROMPTS.get(variant, VARIANT_PROMPTS["add_single_pedestrian"])
     scene_prompt = SCENE_PROMPTS.get(getattr(record, "bucket", None), BASE_CAPTION)
+    prefix = lora_prompt_prefix()
+    subject = f"{prefix}, {variant_prompt}" if prefix else variant_prompt
     return (
-        f"{scene_prompt}. Insert {variant_prompt}. "
+        f"{scene_prompt}. Insert {subject}. "
         "Match scene perspective, nearby pedestrian scale, lighting and traffic-camera realism. "
         "Preserve road, vehicles, buildings and background. "
         "No ghost, silhouette, outline, transparency or oversized human."
