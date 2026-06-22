@@ -104,14 +104,18 @@ class AIReplacePipeline:
         legacy_model_ids = {
             "stabilityai/stable-diffusion-2-inpainting": "sd2-community/stable-diffusion-2-inpainting",
         }
-        requested_model = os.getenv("AI_REPLACE_MODEL_ID", config.MODEL_ID)
-        requested_model = legacy_model_ids.get(requested_model, requested_model)
+
+        def normalize_model_id(model_id) -> str:
+            value = str(model_id or "").strip()
+            return legacy_model_ids.get(value.lower(), value)
+
+        requested_model = normalize_model_id(os.getenv("AI_REPLACE_MODEL_ID", config.MODEL_ID))
         fallback_models = getattr(config, "MODEL_ID_FALLBACKS", ())
         model_ids = []
         for model_id in (requested_model, *fallback_models):
-            model_id = legacy_model_ids.get(model_id, model_id)
-            if model_id and model_id not in model_ids:
-                model_ids.append(model_id)
+            normalized_model_id = normalize_model_id(model_id)
+            if normalized_model_id and normalized_model_id not in model_ids:
+                model_ids.append(normalized_model_id)
 
         errors = []
         for model_id in model_ids:
@@ -207,10 +211,9 @@ class AIReplacePipeline:
         return Image.fromarray(np.clip(depth * 255.0, 0, 255).astype(np.uint8), mode="L")
     def _run_inpainting(self, image: Image.Image, mask_bundle: AIReplaceMaskBundle, prompt: str, negative_prompt: str, seed: int) -> Image.Image:
         self.last_conditioning_meta = {}
-        if self.config.AI_REPLACE_DEPTH_CONDITIONING:
-            depth_map = self._compute_depth_conditioning(image)
-            self.last_conditioning_meta["depth_map_size"] = depth_map.size
-            self.last_conditioning_meta["depth_controlnet_applied"] = False
+        self.last_conditioning_meta["depth_conditioning_enabled"] = bool(self.config.AI_REPLACE_DEPTH_CONDITIONING)
+        self.last_conditioning_meta["depth_conditioning_source"] = "not_applied"
+        self.last_conditioning_meta["depth_controlnet_applied"] = False
         if self.config.AI_REPLACE_LIGHTING_INJECT_PROMPT:
             prompt = self._build_dynamic_prompt(image, mask_bundle.bbox, prompt)
         self.last_conditioning_meta["effective_prompt"] = prompt
