@@ -60,8 +60,8 @@ class AIReplaceConfig:
     AI_REPLACE_MAX_OBJECT_AREA_RATIO: float = 0.40
     AI_REPLACE_CHECK_SHADOW_BLEEDING: bool = True
     AI_REPLACE_MAX_SHADOW_BLEED_DIFF: float = 2.0
-    MIN_OPACITY_SCORE: float = 0.75
-    MIN_CONTRAST_SCORE: float = 0.55
+    MIN_OPACITY_SCORE: float = 0.35
+    MIN_CONTRAST_SCORE: float = 0.30
     MAX_DETECTOR_CONF_DROP: float = 0.15
     MAX_OUTSIDE_MASK_DIFF: float = 1.0
 

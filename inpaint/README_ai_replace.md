@@ -55,7 +55,7 @@ AIReplacePipeline.save_result(result, "ai_replace_outputs", stem="sample_0001")
 
 ## Dependencies
 
-Required at runtime: numpy, Pillow. Real SD3.5 inpainting needs torch plus a compatible Hugging Face stack, tested with `diffusers==0.35.2`, `transformers==4.46.3`, `huggingface_hub==0.36.0`, `accelerate==1.11.0`, safetensors, and optionally ultralytics for YOLO segmentation.
+Required at runtime: numpy, Pillow. Real SD3.5 inpainting needs torch plus a compatible Hugging Face stack, tested with `diffusers==0.35.2`, `transformers==4.46.3`, `huggingface_hub==0.36.0`, `accelerate==1.11.0`, `pillow==10.4.0`, safetensors, and optionally ultralytics for YOLO segmentation. The notebook installs these pins in its first cell so a fresh Kaggle session can use Run All once.
 
 Default inpainting model: `stabilityai/stable-diffusion-3.5-medium` via `StableDiffusion3InpaintPipeline`. The old `stabilityai/stable-diffusion-2-inpainting` repo may return 404 on Hugging Face and is automatically remapped to the community mirror; set `AI_REPLACE_MODEL_ID=/path/to/local/model` or another accessible repo if needed.
 

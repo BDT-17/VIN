@@ -366,6 +366,7 @@ class AIReplacePipeline:
             "object_area_min": object_area_ratio >= self.config.AI_REPLACE_MIN_OBJECT_AREA_RATIO,
             "object_area_max": object_area_ratio <= self.config.AI_REPLACE_MAX_OBJECT_AREA_RATIO,
             "person_opaque": ghost_result.opacity_score >= self.config.MIN_OPACITY_SCORE,
+            "person_contrast": ghost_result.contrast_score >= self.config.MIN_CONTRAST_SCORE,
             "detector_ok": ghost_result.conf_drop <= self.config.MAX_DETECTOR_CONF_DROP,
             "background_preserved": diff <= self.config.MAX_OUTSIDE_MASK_DIFF,
             "shadow_bleeding_ok": (
