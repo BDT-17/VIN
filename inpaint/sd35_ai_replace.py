@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 import json
+import os
 import numpy as np
 from PIL import Image, ImageFilter
 
@@ -100,7 +101,28 @@ class AIReplacePipeline:
         except Exception as exc:  # pragma: no cover - environment dependent
             raise RuntimeError("diffusers and torch are required to load the AI Replace model") from exc
         dtype = torch.float16 if config.TORCH_DTYPE == "float16" else torch.float32
-        pipe = StableDiffusionInpaintPipeline.from_pretrained(config.MODEL_ID, torch_dtype=dtype)
+        requested_model = os.getenv("AI_REPLACE_MODEL_ID", config.MODEL_ID)
+        fallback_models = getattr(config, "MODEL_ID_FALLBACKS", ())
+        model_ids = []
+        for model_id in (requested_model, *fallback_models):
+            if model_id and model_id not in model_ids:
+                model_ids.append(model_id)
+
+        errors = []
+        for model_id in model_ids:
+            try:
+                pipe = StableDiffusionInpaintPipeline.from_pretrained(model_id, torch_dtype=dtype)
+                break
+            except Exception as exc:  # pragma: no cover - depends on Hub/cache state
+                errors.append(f"{model_id}: {type(exc).__name__}: {exc}")
+        else:
+            joined = "\n".join(f"- {error}" for error in errors)
+            raise RuntimeError(
+                "Unable to load an AI Replace inpainting model. "
+                "Set AI_REPLACE_MODEL_ID to a cached/local path or an accessible Hugging Face repo. "
+                f"Tried:\n{joined}"
+            )
+
         pipe.enable_attention_slicing()
         try:
             pipe.enable_xformers_memory_efficient_attention()
