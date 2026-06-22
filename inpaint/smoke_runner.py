@@ -42,10 +42,11 @@ def list_source_images(input_dir: Path, limit: int | None = None) -> list[Path]:
 
 def default_bbox(image: Image.Image) -> tuple[int, int, int, int]:
     w, h = image.size
-    box_h = int(h * 0.38)
-    box_w = int(box_h * 0.36)
+    # Give the inpainting model enough canvas for a full-body pedestrian.
+    box_h = int(h * 0.56)
+    box_w = int(box_h * 0.46)
     cx = int(w * 0.52)
-    y2 = int(h * 0.88)
+    y2 = int(h * 0.94)
     return (max(0, cx - box_w // 2), max(0, y2 - box_h), min(w, cx + box_w // 2), min(h, y2))
 
 
@@ -182,7 +183,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--git-pull", action="store_true")
     parser.add_argument("--remote", default="origin")
     parser.add_argument("--branch", default="main")
-    parser.add_argument("--load-model", action="store_true", help="Load SD2 inpainting; omit for dry-run wiring test.")
+    parser.add_argument("--load-model", action="store_true", help="Load SD3.5 inpainting; omit for dry-run wiring test.")
     parser.add_argument("--no-yolo", action="store_true")
     return parser.parse_args()
 

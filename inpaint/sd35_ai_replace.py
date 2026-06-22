@@ -113,9 +113,24 @@ class AIReplacePipeline:
     def from_pretrained(cls, config: AIReplaceConfig = DEFAULT_CONFIG, device: str = "cuda"):
         try:
             import torch
-            from diffusers import StableDiffusionInpaintPipeline
         except Exception as exc:  # pragma: no cover - environment dependent
-            raise RuntimeError("diffusers and torch are required to load the AI Replace model") from exc
+            raise RuntimeError("torch is required to load the AI Replace model") from exc
+
+        model_type = str(config.AI_REPLACE_MODEL_TYPE).lower()
+        if model_type == "sd35_inpainting":
+            try:
+                from diffusers import StableDiffusion3InpaintPipeline as PipelineClass
+            except Exception as exc:  # pragma: no cover - depends on diffusers version
+                raise RuntimeError(
+                    "StableDiffusion3InpaintPipeline is required for SD3.5 inpainting. "
+                    "Upgrade diffusers on Kaggle, for example: pip install -U diffusers transformers accelerate safetensors."
+                ) from exc
+        else:
+            try:
+                from diffusers import StableDiffusionInpaintPipeline as PipelineClass
+            except Exception as exc:  # pragma: no cover - environment dependent
+                raise RuntimeError("diffusers is required to load the AI Replace model") from exc
+
         dtype = torch.float16 if config.TORCH_DTYPE == "float16" else torch.float32
         legacy_model_ids = {
             "stabilityai/stable-diffusion-2-inpainting": "sd2-community/stable-diffusion-2-inpainting",
@@ -135,9 +150,17 @@ class AIReplacePipeline:
 
         errors = []
         for model_id in model_ids:
+            kwargs = {"torch_dtype": dtype, "use_safetensors": True}
+            if model_type == "sd35_inpainting" and not getattr(config, "USE_T5", False):
+                kwargs.update({"text_encoder_3": None, "tokenizer_3": None})
             try:
-                print(f"Loading AI Replace inpainting model: {model_id}")
-                pipe = StableDiffusionInpaintPipeline.from_pretrained(model_id, torch_dtype=dtype)
+                print(f"Loading AI Replace {model_type} model: {model_id}")
+                try:
+                    pipe = PipelineClass.from_pretrained(model_id, **kwargs)
+                except TypeError:
+                    kwargs.pop("text_encoder_3", None)
+                    kwargs.pop("tokenizer_3", None)
+                    pipe = PipelineClass.from_pretrained(model_id, **kwargs)
                 break
             except Exception as exc:  # pragma: no cover - depends on Hub/cache state
                 errors.append(f"{model_id}: {type(exc).__name__}: {exc}")
@@ -145,16 +168,25 @@ class AIReplacePipeline:
             joined = "\n".join(f"- {error}" for error in errors)
             raise RuntimeError(
                 "Unable to load an AI Replace inpainting model. "
-                "Set AI_REPLACE_MODEL_ID to a cached/local path or an accessible Hugging Face repo. "
+                "For SD3.5, make sure the Hugging Face token has access to stabilityai/stable-diffusion-3.5-medium. "
                 f"Tried:\n{joined}"
             )
 
-        pipe.enable_attention_slicing()
+        if hasattr(pipe, "enable_vae_slicing"):
+            pipe.enable_vae_slicing()
+        if hasattr(pipe, "enable_vae_tiling"):
+            pipe.enable_vae_tiling()
+        if hasattr(pipe, "enable_attention_slicing"):
+            pipe.enable_attention_slicing()
         try:
             pipe.enable_xformers_memory_efficient_attention()
         except Exception:
             pass
-        pipe = pipe.to(device)
+        if str(device).startswith("cuda") and getattr(config, "USE_MODEL_CPU_OFFLOAD", False) and hasattr(pipe, "enable_model_cpu_offload"):
+            gpu_id = torch.device(device).index or 0
+            pipe.enable_model_cpu_offload(gpu_id=gpu_id)
+        else:
+            pipe = pipe.to(device)
         return cls(config=config, pipe=pipe, device=device)
 
     @staticmethod
@@ -242,16 +274,21 @@ class AIReplacePipeline:
             import torch
             generator = torch.Generator(device=self.device).manual_seed(int(seed))
             mask_image = mask_bundle.to_pil().resize(image.size, Image.NEAREST)
-            generated = self.pipe(
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                image=image,
-                mask_image=mask_image,
-                strength=float(self.config.AI_REPLACE_STRENGTH),
-                guidance_scale=float(self.config.AI_REPLACE_GUIDANCE_SCALE),
-                num_inference_steps=int(self.config.AI_REPLACE_STEPS),
-                generator=generator,
-            ).images[0].resize(image.size)
+            call_kwargs = {
+                "prompt": prompt,
+                "negative_prompt": negative_prompt,
+                "image": image,
+                "mask_image": mask_image,
+                "strength": float(self.config.AI_REPLACE_STRENGTH),
+                "guidance_scale": float(self.config.AI_REPLACE_GUIDANCE_SCALE),
+                "num_inference_steps": int(self.config.AI_REPLACE_STEPS),
+                "generator": generator,
+            }
+            try:
+                generated = self.pipe(**call_kwargs).images[0].resize(image.size)
+            except TypeError:
+                call_kwargs.pop("negative_prompt", None)
+                generated = self.pipe(**call_kwargs).images[0].resize(image.size)
             if self.device.startswith("cuda"):
                 torch.cuda.empty_cache()
         if self.config.AI_REPLACE_HARD_RESTORE_OUTSIDE_MASK:

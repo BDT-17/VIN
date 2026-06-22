@@ -28,15 +28,16 @@ class AIReplaceConfig:
 
     AI_REPLACE_NUM_VARIANTS: int = 3
 
-    AI_REPLACE_STRENGTH: float = 0.72
-    AI_REPLACE_GUIDANCE_SCALE: float = 7.0
-    AI_REPLACE_STEPS: int = 32
+    AI_REPLACE_STRENGTH: float = 0.95
+    AI_REPLACE_GUIDANCE_SCALE: float = 6.8
+    AI_REPLACE_STEPS: int = 36
     AI_REPLACE_RESOLUTION: int = 512
 
     AI_REPLACE_OBJECT_CLASS: str = "person"
     AI_REPLACE_PROMPT: str = (
-        "one realistic opaque pedestrian, full body, natural lighting, "
-        "matching camera perspective, realistic street photo"
+        "a single realistic full-body pedestrian standing centered inside the masked area, "
+        "opaque person, visible head torso arms legs shoes, natural street photo, "
+        "matching camera perspective and lighting"
     )
     AI_REPLACE_NEGATIVE_PROMPT: str = (
         "transparent, ghost, silhouette, cropped, missing limbs, "
@@ -68,11 +69,11 @@ class AIReplaceConfig:
     AI_REPLACE_LOCAL_PATCH_SIZE: int = 16
     AI_REPLACE_LOCAL_COLOR_STRENGTH: float = 0.10
 
-    AI_REPLACE_MODEL_TYPE: str = "sd2_inpainting"
-    MODEL_ID: str = "sd2-community/stable-diffusion-2-inpainting"
-    MODEL_ID_FALLBACKS: tuple[str, ...] = (
-        "runwayml/stable-diffusion-inpainting",
-    )
+    AI_REPLACE_MODEL_TYPE: str = "sd35_inpainting"
+    MODEL_ID: str = "stabilityai/stable-diffusion-3.5-medium"
+    MODEL_ID_FALLBACKS: tuple[str, ...] = ()
+    USE_T5: bool = False
+    USE_MODEL_CPU_OFFLOAD: bool = True
     TORCH_DTYPE: str = "float16"
 
 
