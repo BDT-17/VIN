@@ -122,8 +122,10 @@ class AIReplacePipeline:
                 from diffusers import StableDiffusion3InpaintPipeline as PipelineClass
             except Exception as exc:  # pragma: no cover - depends on diffusers version
                 raise RuntimeError(
-                    "StableDiffusion3InpaintPipeline is required for SD3.5 inpainting. "
-                    "Upgrade diffusers on Kaggle, for example: pip install -U diffusers transformers accelerate safetensors."
+                    "StableDiffusion3InpaintPipeline could not be imported for SD3.5 inpainting. "
+                    "On Kaggle this is often a transformers/huggingface_hub version mismatch. "
+                    "Run the notebook install cell with pinned versions, restart the kernel, then rerun from Imports: "
+                    "pip install --force-reinstall diffusers==0.35.2 transformers==4.46.3 huggingface_hub==0.36.0 accelerate==1.11.0 safetensors"
                 ) from exc
         else:
             try:
