@@ -359,7 +359,7 @@ RETRY_CONFIG = {'CONTEXT_PERSON_FALLBACK_TO_BBOX_INPAINT': False,
 GENERATION_CONFIG = {'AUGMENTATION_STRENGTH': 0.72, 'GUIDANCE_SCALE': 7.2, 'NUM_INFERENCE_STEPS': 36}
 
 LORA_CONFIG = {
- 'LORA_ENABLED': False,
+ 'LORA_ENABLED': True,
  'LORA_PATH': None,
  'LORA_WEIGHT_NAME': None,
  'LORA_ADAPTER_NAME': 'citypersons_lora',
@@ -551,4 +551,5 @@ def ensure_output_dirs():
         "patch_debug_dir": PATCH_DEBUG_DIR,
         "edge_debug_dir": EDGE_DEBUG_DIR,
     }
+
 
