@@ -3,6 +3,7 @@
 Examples:
     python inpaint/smoke_runner.py --input-dir /kaggle/input/my-dataset --num-images 20 --git-pull
     python inpaint/smoke_runner.py --input-dir ./samples --num-images 5 --dry-run
+    python inpaint/smoke_runner.py --kaggle-presets --num-images 3 --load-model
 """
 
 from __future__ import annotations
@@ -25,6 +26,25 @@ if str(ROOT) not in sys.path:
 from inpaint.sd35_ai_replace import AIReplacePipeline
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+KAGGLE_DATASET_PRESETS = {
+    "citypersons_bg_yolo": {
+        "input_dir": Path("/kaggle/input/datasets/muttahirulislam/citypersons-dataset-with-bg-image/yolo_dir/yolo_dir"),
+        "num_images": 3,
+    },
+    "cityperson_nguyena": {
+        "input_dir": Path("/kaggle/input/datasets/nguyenaabcxyzeric/cityperson"),
+        "num_images": 3,
+    },
+    "mot17_02_frcnn": {
+        "input_dir": Path("/kaggle/input/datasets/kyoru4444/mot17-02-fcrnn/MOT17-02-FRCNN"),
+        "num_images": 3,
+    },
+    "human_detection_dataset": {
+        "input_dir": Path("/kaggle/input/datasets/constantinwerner/human-detection-dataset/human detection dataset/0"),
+        "num_images": 3,
+    },
+}
 
 
 def git_pull_ff_only(repo_root: Path = ROOT, remote: str = "origin", branch: str = "main") -> None:
@@ -126,6 +146,31 @@ def summarize_rows(rows: list[dict], output_dir: Path) -> dict:
     return summary
 
 
+def summarize_combined_rows(rows: list[dict], dataset_summaries: dict[str, dict], output_dir: Path) -> dict:
+    summary = summarize_rows(rows, output_dir)
+    summary["num_datasets"] = len(dataset_summaries)
+    summary["datasets"] = dataset_summaries
+    metrics_dir = output_dir / "metrics"
+    (metrics_dir / "metrics_summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    with (metrics_dir / "metrics_summary.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["dataset_preset", "num_generated", "num_accepted", "accept_rate", "ghost_reject_rate"],
+        )
+        writer.writeheader()
+        for name, dataset_summary in dataset_summaries.items():
+            writer.writerow(
+                {
+                    "dataset_preset": name,
+                    "num_generated": dataset_summary.get("num_generated", 0),
+                    "num_accepted": dataset_summary.get("num_accepted", 0),
+                    "accept_rate": dataset_summary.get("accept_rate", 0.0),
+                    "ghost_reject_rate": dataset_summary.get("ghost_reject_rate", 0.0),
+                }
+            )
+    return summary
+
+
 def maybe_load_yolo(enabled: bool):
     if not enabled:
         return None
@@ -137,13 +182,22 @@ def maybe_load_yolo(enabled: bool):
         return None
 
 
-def run_smoke(input_dir: Path, output_dir: Path, num_images: int = 20, seed: int = 42, load_model: bool = False, use_yolo: bool = True):
+def run_smoke(
+    input_dir: Path,
+    output_dir: Path,
+    num_images: int = 20,
+    seed: int = 42,
+    load_model: bool = False,
+    use_yolo: bool = True,
+    pipe: AIReplacePipeline | None = None,
+    yolo_segmenter=None,
+):
     paths = ensure_dirs(output_dir)
     images = list_source_images(input_dir, limit=num_images)
     if not images:
         raise FileNotFoundError(f"No source images found under {input_dir}")
-    pipe = AIReplacePipeline.from_pretrained(device="cuda") if load_model else AIReplacePipeline(pipe=None, device="cpu")
-    yolo = maybe_load_yolo(use_yolo)
+    pipe = pipe or (AIReplacePipeline.from_pretrained(device="cuda") if load_model else AIReplacePipeline(pipe=None, device="cpu"))
+    yolo = yolo_segmenter if yolo_segmenter is not None else maybe_load_yolo(use_yolo)
     rows = []
     for index, image_path in enumerate(images):
         image = Image.open(image_path).convert("RGB")
@@ -175,9 +229,58 @@ def run_smoke(input_dir: Path, output_dir: Path, num_images: int = 20, seed: int
     return rows, summary
 
 
+def run_all_kaggle_presets(
+    output_dir: Path = Path("/kaggle/working/ai_replace_smoke"),
+    num_images: int | None = None,
+    seed: int = 42,
+    load_model: bool = False,
+    use_yolo: bool = True,
+    presets: dict[str, dict] | None = None,
+    fail_on_missing: bool = True,
+):
+    selected_presets = presets or KAGGLE_DATASET_PRESETS
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pipe = AIReplacePipeline.from_pretrained(device="cuda") if load_model else AIReplacePipeline(pipe=None, device="cpu")
+    yolo = maybe_load_yolo(use_yolo)
+    combined_rows = []
+    dataset_summaries = {}
+
+    for preset_index, (name, preset) in enumerate(selected_presets.items()):
+        input_dir = Path(preset["input_dir"])
+        preset_limit = num_images if num_images is not None else int(preset.get("num_images", 20))
+        dataset_output_dir = output_dir / name
+        if not input_dir.exists():
+            message = f"Kaggle preset path not found for {name}: {input_dir}"
+            if fail_on_missing:
+                raise FileNotFoundError(message)
+            print(f"Skipping {message}")
+            dataset_summaries[name] = {"skipped": True, "reason": "missing_input_dir", "input_dir": str(input_dir)}
+            continue
+
+        rows, summary = run_smoke(
+            input_dir=input_dir,
+            output_dir=dataset_output_dir,
+            num_images=preset_limit,
+            seed=seed + (preset_index * 1000),
+            load_model=load_model,
+            use_yolo=False,
+            pipe=pipe,
+            yolo_segmenter=yolo,
+        )
+        dataset_summaries[name] = {**summary, "input_dir": str(input_dir), "output_dir": str(dataset_output_dir)}
+        for row in rows:
+            combined_rows.append({**row, "dataset_preset": name, "dataset_output_dir": str(dataset_output_dir)})
+
+    write_manifest(combined_rows, output_dir)
+    combined_summary = summarize_combined_rows(combined_rows, dataset_summaries, output_dir)
+    print("Combined AI Replace smoke summary:")
+    print(json.dumps(combined_summary, indent=2, ensure_ascii=False))
+    return combined_rows, combined_summary
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run full AI Replace smoke test.")
-    parser.add_argument("--input-dir", type=Path, required=True)
+    parser.add_argument("--input-dir", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("/kaggle/working/ai_replace_smoke"))
     parser.add_argument("--num-images", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
@@ -186,6 +289,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--branch", default="main")
     parser.add_argument("--load-model", action="store_true", help="Load SD3.5 inpainting; omit for dry-run wiring test.")
     parser.add_argument("--no-yolo", action="store_true")
+    parser.add_argument("--kaggle-presets", action="store_true", help="Run every built-in Kaggle dataset preset and emit combined artifacts.")
+    parser.add_argument("--skip-missing", action="store_true", help="Skip missing Kaggle preset paths instead of failing.")
     return parser.parse_args()
 
 
@@ -193,6 +298,16 @@ def main() -> None:
     args = parse_args()
     if args.git_pull:
         git_pull_ff_only(remote=args.remote, branch=args.branch)
+    if args.kaggle_presets or args.input_dir is None:
+        run_all_kaggle_presets(
+            output_dir=args.output_dir,
+            num_images=args.num_images,
+            seed=args.seed,
+            load_model=args.load_model,
+            use_yolo=not args.no_yolo,
+            fail_on_missing=not args.skip_missing,
+        )
+        return
     run_smoke(args.input_dir, args.output_dir, args.num_images, args.seed, args.load_model, not args.no_yolo)
 
 
