@@ -40,3 +40,26 @@ Keep `LORA_ENABLED=False` to run the copied baseline behavior. Do not set `LORA_
 ## Suggested first run
 
 Use the smoke preset first and inspect accept rate, reject reasons, and debug strips before changing validation thresholds. Treat LoRA as a generator adapter; keep placement, scale correction, compositing, and YOLO validation unchanged until the smoke run shows a clear pattern.
+
+## Training and `.pt` model artifact
+
+`sd35_lora_training.py` adds an explicit training/export entrypoint while keeping the augmentation runner focused on inference and evaluation.
+
+Default training settings are conservative for an NVIDIA T4 16 GB: SD3.5 Medium, 512 px, fp16, batch size 1, gradient accumulation 4, gradient checkpointing, 8-bit Adam, frozen text encoders, and rank-8 attention LoRA.
+
+A dry run writes the command and config without starting a long training job:
+
+```python
+from sd35_lora_training import run_lora_training
+run_lora_training(dry_run=True)
+```
+
+A real run expects a prepared captioned/cropped training folder at `LORA_TRAINING_DATA_DIR` and a local Diffusers SD3 LoRA training script, for example `train_dreambooth_lora_sd3.py`. After training finishes, the helper exports the native adapter plus:
+
+```text
+/kaggle/working/sd35m-pedestrian-v1/pytorch_lora_weights.pt
+/kaggle/working/sd35m-pedestrian-v1/training_config.json
+/kaggle/working/sd35m-pedestrian-v1/training_provenance.json
+```
+
+`export_outputs()` now includes `LORA_TRAINING_OUTPUT_DIR`, so the final zip contains the `.pt` model artifact whenever the training output directory exists.

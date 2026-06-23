@@ -359,14 +359,47 @@ RETRY_CONFIG = {'CONTEXT_PERSON_FALLBACK_TO_BBOX_INPAINT': False,
 GENERATION_CONFIG = {'AUGMENTATION_STRENGTH': 0.72, 'GUIDANCE_SCALE': 7.2, 'NUM_INFERENCE_STEPS': 36}
 
 LORA_CONFIG = {
- 'LORA_ENABLED': False,
- 'LORA_PATH': None,
- 'LORA_WEIGHT_NAME': None,
- 'LORA_ADAPTER_NAME': 'citypersons_lora',
- 'LORA_SCALE': 1.0,
+ 'LORA_ENABLED': True,
+ 'LORA_PATH': Path('/kaggle/input/sd35m-pedestrian-v1'),
+ 'LORA_WEIGHT_NAME': 'pytorch_lora_weights.safetensors',
+ 'LORA_ADAPTER_NAME': 'vinped_v1',
+ 'LORA_SCALE': 0.7,
  'LORA_FUSE': False,
- 'LORA_TRIGGER_TOKEN': '',
- 'LORA_PROMPT_PREFIX': ''}
+ 'LORA_TRIGGER_TOKEN': 'vinped_v1',
+ 'LORA_PROMPT_PREFIX': 'pedestrian'}
+
+LORA_TRAINING_CONFIG = {
+ 'LORA_TRAINING_ENABLED': False,
+ 'LORA_TRAINING_NAME': 'sd35m-pedestrian-v1',
+ 'LORA_TRAINING_DATA_DIR': Path('/kaggle/working/lora_training_data'),
+ 'LORA_TRAINING_OUTPUT_DIR': Path('/kaggle/working/sd35m-pedestrian-v1'),
+ 'LORA_TRAINING_IMAGE_COLUMN': 'image_path',
+ 'LORA_TRAINING_CAPTION_COLUMN': 'caption',
+ 'LORA_TRAINING_VALIDATION_PROMPT': 'vinped_v1 full-body pedestrian in an urban street scene',
+ 'LORA_TRAINING_RESOLUTION': 512,
+ 'LORA_TRAINING_MIXED_PRECISION': 'fp16',
+ 'LORA_TRAINING_BATCH_SIZE': 1,
+ 'LORA_TRAINING_GRADIENT_ACCUMULATION_STEPS': 4,
+ 'LORA_TRAINING_GRADIENT_CHECKPOINTING': True,
+ 'LORA_TRAINING_USE_8BIT_ADAM': True,
+ 'LORA_TRAINING_CACHE_LATENTS': True,
+ 'LORA_TRAINING_MAX_SEQUENCE_LENGTH': 77,
+ 'LORA_TRAINING_TRAIN_TEXT_ENCODER': False,
+ 'LORA_TRAINING_RANK': 8,
+ 'LORA_TRAINING_DROPOUT': 0.05,
+ 'LORA_TRAINING_LEARNING_RATE': 1.0e-4,
+ 'LORA_TRAINING_MAX_TRAIN_STEPS': 1000,
+ 'LORA_TRAINING_CHECKPOINTING_STEPS': 250,
+ 'LORA_TRAINING_SEED': 42,
+ 'LORA_TRAINING_TARGET_MODULES': [
+     'attn.to_k',
+     'attn.to_q',
+     'attn.to_v',
+     'attn.to_out.0',
+ ],
+ 'LORA_TRAINING_PT_NAME': 'pytorch_lora_weights.pt',
+ 'LORA_TRAINING_SAVE_PROVENANCE': True,
+}
 
 DEBUG_CONFIG = {'DEBUG_SCALE_VISUALIZATION': False}
 
@@ -417,6 +450,7 @@ CONFIG_GROUPS = [
     RETRY_CONFIG,
     GENERATION_CONFIG,
     LORA_CONFIG,
+    LORA_TRAINING_CONFIG,
     DEBUG_CONFIG,
     EDGE_HARMONIZATION_CONFIG,
     AFFORDANCE_CONFIG,
@@ -547,11 +581,16 @@ def ensure_output_dirs():
     METRICS_DIR.mkdir(parents=True, exist_ok=True)
     PATCH_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
     EDGE_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+    if LORA_TRAINING_ENABLED:
+        LORA_TRAINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     return {
         "output_dir": OUTPUT_DIR,
         "metrics_dir": METRICS_DIR,
         "patch_debug_dir": PATCH_DEBUG_DIR,
         "edge_debug_dir": EDGE_DEBUG_DIR,
+        "lora_training_output_dir": LORA_TRAINING_OUTPUT_DIR,
     }
+
+
 
 

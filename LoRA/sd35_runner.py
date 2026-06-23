@@ -671,7 +671,12 @@ def run_smoke(records, smoke_images=10, smoke_splits=None):
 
 def _default_export_roots():
     working_dir = Path("/kaggle/working")
-    roots = [Path(OUTPUT_DIR), Path(METRICS_DIR), Path(AUTOTUNE_SETTINGS.get("snapshot_dir", working_dir / "autotune_snapshots"))]
+    roots = [
+        Path(OUTPUT_DIR),
+        Path(METRICS_DIR),
+        Path(AUTOTUNE_SETTINGS.get("snapshot_dir", working_dir / "autotune_snapshots")),
+        Path(LORA_TRAINING_OUTPUT_DIR),
+    ]
     if working_dir.exists():
         for path in sorted(working_dir.iterdir()):
             if not path.is_dir():

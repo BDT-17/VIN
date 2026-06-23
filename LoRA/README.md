@@ -202,3 +202,22 @@ The run can produce:
 ## Status
 
 This is a research baseline for **background-preserving object insertion augmentation**. It is not a production augmentation service. The current implementation is strongest for pedestrians because that is the reference class, but the intended abstraction is a general object insertion pipeline.
+
+## SD3.5 LoRA training artifact
+
+The LoRA flow now includes `sd35_lora_training.py` as a separate training/export helper. It does not run training during normal augmentation. Use it explicitly when you have prepared captioned pedestrian training crops.
+
+Dry-run command/config generation:
+
+```python
+from sd35_lora_training import run_lora_training
+run_lora_training(dry_run=True)
+```
+
+When `LORA_TRAINING_ENABLED=True` and the Diffusers SD3 LoRA training script is available, `run_lora_training(dry_run=False)` writes the native adapter and also exports a PyTorch model artifact:
+
+```text
+/kaggle/working/sd35m-pedestrian-v1/pytorch_lora_weights.pt
+```
+
+`export_outputs()` includes `LORA_TRAINING_OUTPUT_DIR`, so the `.pt` file is bundled into the final export zip whenever that output directory exists.
