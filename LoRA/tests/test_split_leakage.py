@@ -18,12 +18,15 @@ def mock_images_and_groups():
         for img_idx in range(5):
             image_id = f"img_{group_idx}_{img_idx}"
             source_id = f"source{group_idx % 3}"
+            # Groups 0-13 come from the source 'train' folder, 14-19 from 'valid'.
+            original_split = 'train' if group_idx < 14 else 'valid'
 
             images.append({
                 'image_id': image_id,
                 'source_id': source_id,
                 'width': 1024,
                 'height': 512,
+                'original_split': original_split,
             })
 
             groups.append({
@@ -148,75 +151,87 @@ def test_split_validator_detects_cross_split_leakage(tmp_path, mock_images_and_g
     assert 'spanning multiple splits' in result['errors'][0]
 
 
-def test_split_validator_detects_benchmark_leak(tmp_path, mock_images_and_groups):
-    """Test that validator detects benchmark-locked images in training."""
+def test_split_validator_detects_group_leak(tmp_path, mock_images_and_groups):
+    """Validator flags a split_group_id shared by LoRA and frozen benchmark roles."""
     images_df, groups_df = mock_images_and_groups
 
-    # Mark source0 as benchmark-locked
-    benchmark_sources = ['source0']
-
-    # Create samples including benchmark images in training
-    samples = []
-    for idx in range(20):
-        img_id = f"img_{idx}_0"
-        samples.append({
-            'sample_id': f"sample_{idx}",
-            'image_id': img_id,
-            'role': 'lora_positive',
-            'split': 'train',  # Benchmark images in training!
-            'split_group_id': f"group_{idx}",
-        })
-
+    # group_0 appears in BOTH a LoRA role and a frozen benchmark role -> leakage
+    samples = [
+        {'sample_id': 's_lora', 'image_id': 'img_0_0', 'role': 'lora_positive',
+         'split': 'train', 'split_group_id': 'group_0'},
+        {'sample_id': 's_bench', 'image_id': 'img_0_1', 'role': 'detector_test_real_frozen',
+         'split': 'test', 'split_group_id': 'group_0'},
+    ]
     samples_df = pd.DataFrame(samples)
 
-    # Validate
     result = SplitValidator.validate_split_safety(
         images_df=images_df,
         groups_df=groups_df,
         samples_df=samples_df,
-        benchmark_locked_sources=benchmark_sources,
+        benchmark_locked_sources=['source0'],
     )
 
     assert result['valid'] is False
-    assert len(result['errors']) > 0
-    assert 'benchmark-locked' in result['errors'][0]
+    assert any('shared between LoRA and frozen benchmark' in e for e in result['errors'])
 
 
-def test_create_split_locks(mock_images_and_groups):
-    """Test creating split locks for benchmark samples."""
+def test_split_validator_allows_benchmark_train_for_lora(tmp_path, mock_images_and_groups):
+    """A benchmark source MAY supply LoRA training data when scenes are disjoint."""
     images_df, groups_df = mock_images_and_groups
 
-    # Mark source0 as benchmark
-    benchmark_sources = ['source0']
-
-    # Create samples
-    samples = []
-    for idx in range(20):
-        img_id = f"img_{idx}_0"
-        source_id = f"source{idx % 3}"
-
-        samples.append({
-            'sample_id': f"sample_{idx}",
-            'image_id': img_id,
-            'role': 'lora_positive',
-            'split': 'val' if idx < 10 else 'test',
-            'split_group_id': f"group_{idx}",
-        })
-
+    samples = [
+        # benchmark source0, distinct groups -> no shared scene -> no leak
+        {'sample_id': 's_lora', 'image_id': 'img_0_0', 'role': 'lora_positive',
+         'split': 'train', 'split_group_id': 'group_0'},
+        {'sample_id': 's_bench', 'image_id': 'img_3_0', 'role': 'detector_test_real_frozen',
+         'split': 'test', 'split_group_id': 'group_3'},
+    ]
     samples_df = pd.DataFrame(samples)
 
-    # Apply locks
-    locked_df = create_split_locks(
-        samples_df=samples_df,
-        benchmark_locked_sources=benchmark_sources,
+    result = SplitValidator.validate_split_safety(
         images_df=images_df,
+        groups_df=groups_df,
+        samples_df=samples_df,
+        benchmark_locked_sources=['source0'],
     )
 
-    # Check that benchmark images have correct roles
-    benchmark_images = images_df[images_df['source_id'].isin(benchmark_sources)]['image_id']
-    benchmark_samples = locked_df[locked_df['image_id'].isin(benchmark_images)]
+    assert result['valid'] is True
 
-    # Should have detector roles, not lora roles
-    assert 'detector_val_real_frozen' in benchmark_samples['role'].values
-    assert 'detector_test_real_frozen' in benchmark_samples['role'].values
-    assert 'lora_positive' not in benchmark_samples['role'].values
+
+def test_create_split_locks_carves_and_keeps_lora(mock_images_and_groups):
+    """New policy: valid->frozen val, train 'test' slice->frozen test,
+    train 'train'/'val' slice stays lora_positive (used for LoRA)."""
+    images_df, groups_df = mock_images_and_groups
+    benchmark_sources = ['source0']
+
+    # source0 groups: train-origin 0,3,6,9,12 ; valid-origin 15,18
+    rows = [
+        ('img_0_0',  'test',  'group_0'),   # train-origin, splitter put in test -> frozen test
+        ('img_3_0',  'train', 'group_3'),   # train-origin -> stays lora_positive
+        ('img_6_0',  'val',   'group_6'),   # train-origin -> stays lora_positive
+        ('img_15_0', 'train', 'group_15'),  # valid-origin -> frozen val (split forced to val)
+        ('img_18_0', 'test',  'group_18'),  # valid-origin -> frozen val (split forced to val)
+    ]
+    samples_df = pd.DataFrame([
+        {'sample_id': f"s_{i}", 'image_id': iid, 'role': 'lora_positive',
+         'split': sp, 'split_group_id': g}
+        for i, (iid, sp, g) in enumerate(rows)
+    ])
+
+    locked = create_split_locks(samples_df, benchmark_sources, images_df)
+    role = lambda iid: locked.loc[locked['image_id'] == iid, 'role'].iloc[0]
+    split = lambda iid: locked.loc[locked['image_id'] == iid, 'split'].iloc[0]
+
+    # valid-origin -> frozen val, split forced to 'val'
+    assert role('img_15_0') == 'detector_val_real_frozen' and split('img_15_0') == 'val'
+    assert role('img_18_0') == 'detector_val_real_frozen' and split('img_18_0') == 'val'
+    # train-origin in 'test' -> frozen test
+    assert role('img_0_0') == 'detector_test_real_frozen' and split('img_0_0') == 'test'
+    # train-origin in train/val -> kept for LoRA
+    assert role('img_3_0') == 'lora_positive'
+    assert role('img_6_0') == 'lora_positive'
+
+    # scene-disjoint: no group shared between lora and benchmark
+    lora_g = set(locked[locked['role'] == 'lora_positive']['split_group_id'])
+    bench_g = set(locked[locked['role'].str.startswith('detector_')]['split_group_id'])
+    assert lora_g.isdisjoint(bench_g)

@@ -40,22 +40,23 @@ class SplitValidator:
             for group_id, splits in cross_split_groups.head(10).items():
                 errors.append(f"  Group {group_id}: {splits}")
 
-        # Check 2: No benchmark-locked images in training splits
-        benchmark_images = images_df[
-            images_df['source_id'].isin(benchmark_locked_sources)
-        ]['image_id'].tolist()
+        # Check 2: No scene (split_group_id) shared between LoRA roles and the
+        # frozen benchmark roles. This is the real leakage invariant: a
+        # benchmark source MAY contribute LoRA training data, as long as the
+        # frozen val/test scenes are group-disjoint from the LoRA scenes.
+        lora_roles = {'lora_positive', 'lora_val'}
+        benchmark_roles = {'detector_val_real_frozen', 'detector_test_real_frozen'}
+        lora_groups = set(
+            samples_df[samples_df['role'].isin(lora_roles)]['split_group_id'].dropna()
+        )
+        bench_groups = set(
+            samples_df[samples_df['role'].isin(benchmark_roles)]['split_group_id'].dropna()
+        )
+        group_leak = lora_groups & bench_groups
 
-        training_samples = samples_df[
-            samples_df['split'].isin(['train', 'val'])
-        ]
-
-        benchmark_in_training = training_samples[
-            training_samples['image_id'].isin(benchmark_images)
-        ]
-
-        if len(benchmark_in_training) > 0:
+        if len(group_leak) > 0:
             errors.append(
-                f"Found {len(benchmark_in_training)} benchmark-locked samples in training splits"
+                f"Found {len(group_leak)} split_group_ids shared between LoRA and frozen benchmark"
             )
 
         # Check 3: No image appears in multiple roles that would cause leakage
@@ -90,7 +91,7 @@ class SplitValidator:
             'val_count': (samples_df['split'] == 'val').sum(),
             'test_count': (samples_df['split'] == 'test').sum(),
             'cross_split_duplicate_count': len(cross_split_groups),
-            'benchmark_overlap_count': len(benchmark_in_training),
+            'benchmark_overlap_count': len(group_leak),
         }
 
         return {
@@ -191,9 +192,18 @@ def create_split_locks(
 ) -> pd.DataFrame:
     """Create split locks for benchmark-protected samples.
 
-    Uses original_split from the source dataset (not the randomly assigned split)
-    to determine which samples become detector_val_real_frozen vs detector_test_real_frozen.
-    ALL benchmark-source images are excluded from LoRA training regardless of original_split.
+    Policy (a benchmark source contributes BOTH frozen benchmark and LoRA data,
+    kept scene-disjoint via the group-aware DatasetSplitter):
+
+      - source 'valid'/'val' folder           -> detector_val_real_frozen (frozen val)
+      - source 'train' folder, group assigned
+        'test' by the splitter (~15%)          -> detector_test_real_frozen (frozen test)
+      - source 'train' folder, group assigned
+        'train'/'val' (~85%)                    -> kept as lora_positive (LoRA training)
+
+    Scene-disjointness is guaranteed because the DatasetSplitter never lets a
+    split_group_id span splits, and group IDs embed original_split (so train- and
+    valid-folder groups never collide).
 
     Returns:
         samples_df with updated 'role' and corrected 'split' for locked samples
@@ -213,24 +223,27 @@ def create_split_locks(
 
     samples_df = samples_df.copy()
     is_benchmark = samples_df['image_id'].isin(benchmark_image_ids)
+    orig_split = samples_df['image_id'].map(original_split_map)  # NaN for non-benchmark
 
-    # Override randomly-assigned split with authoritative original_split
-    samples_df.loc[is_benchmark, 'split'] = (
-        samples_df.loc[is_benchmark, 'image_id'].map(original_split_map)
-    )
+    # --- Frozen VAL: everything from the source 'valid' folder ---
+    is_orig_val = is_benchmark & (orig_split == 'val')
+    samples_df.loc[is_orig_val, 'split'] = 'val'
+    samples_df.loc[is_orig_val, 'role'] = 'detector_val_real_frozen'
 
-    # Assign frozen benchmark roles based on corrected original split
-    samples_df.loc[is_benchmark & (samples_df['split'] == 'val'), 'role'] = 'detector_val_real_frozen'
-    samples_df.loc[is_benchmark & (samples_df['split'] == 'test'), 'role'] = 'detector_test_real_frozen'
+    # --- Frozen TEST: the group-disjoint 'test' slice of the source 'train'
+    #     folder (assigned by the group-aware splitter, ~test_ratio of train) ---
+    is_orig_train = is_benchmark & (orig_split == 'train')
+    is_train_to_test = is_orig_train & (samples_df['split'] == 'test')
+    samples_df.loc[is_train_to_test, 'role'] = 'detector_test_real_frozen'
 
-    # Remove ALL benchmark images that still carry a LoRA role (original train split)
-    samples_df = samples_df[
-        ~(is_benchmark & samples_df['role'].isin(['lora_positive', 'lora_val']))
-    ]
+    # --- LoRA: source 'train' folder groups assigned train/val keep
+    #     role 'lora_positive' (the default) and their split. Nothing to do. ---
 
-    locked_val = (samples_df['role'] == 'detector_val_real_frozen').sum()
-    locked_test = (samples_df['role'] == 'detector_test_real_frozen').sum()
-    print(f"  Benchmark locked: {locked_val} val_frozen, {locked_test} test_frozen "
-          f"(from original_split, not random assignment)")
+    locked_val = int((samples_df['role'] == 'detector_val_real_frozen').sum())
+    locked_test = int((samples_df['role'] == 'detector_test_real_frozen').sum())
+    lora_from_bench = int((is_orig_train & samples_df['split'].isin(['train', 'val'])).sum())
+    print(f"  Benchmark: {locked_val} val_frozen (source valid), "
+          f"{locked_test} test_frozen (group-disjoint slice of source train); "
+          f"{lora_from_bench} source-train samples kept for LoRA")
 
     return samples_df
