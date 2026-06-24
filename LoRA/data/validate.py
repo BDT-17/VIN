@@ -112,13 +112,16 @@ def validate_release(release_dir: Path, config: Optional[dict] = None) -> dict:
     if missing_caption.any():
         errors.append(f"{missing_caption.sum()} samples with missing captions")
 
-    # Check trigger token
-    trigger_token = samples_df['trigger_token'].iloc[0] if len(samples_df) > 0 else "<vin_ped>"
-    missing_trigger = lora_samples['caption'].apply(
-        lambda c: isinstance(c, str) and trigger_token not in c
-    )
-    if missing_trigger.any():
-        errors.append(f"{missing_trigger.sum()} samples where trigger token '{trigger_token}' is missing from caption")
+    # Check trigger token — must not be empty
+    trigger_token = samples_df['trigger_token'].iloc[0] if len(samples_df) > 0 else ""
+    if not trigger_token:
+        errors.append("trigger_token is empty — set a non-empty token in sources.yaml caption_config")
+    else:
+        missing_trigger = lora_samples['caption'].apply(
+            lambda c: isinstance(c, str) and trigger_token not in c
+        )
+        if missing_trigger.any():
+            errors.append(f"{missing_trigger.sum()} samples where trigger token '{trigger_token}' is missing from caption")
 
     # ---- Gate 4: Crop files missing ----
     missing_crops = lora_samples['crop_path'].apply(
@@ -140,6 +143,119 @@ def validate_release(release_dir: Path, config: Optional[dict] = None) -> dict:
             errors.append(
                 f"{len(lora_non_canonical)} LoRA samples use non-canonical duplicate images"
             )
+
+    # ---- Gate 6: lora_train and lora_val must both be non-empty ----
+    lora_train_count = int((lora_samples['split'] == 'train').sum())
+    lora_val_count = int((lora_samples['split'] == 'val').sum())
+    if lora_train_count == 0:
+        errors.append("lora_train_count is 0 — no LoRA training samples in release")
+    if lora_val_count == 0:
+        errors.append("lora_val_count is 0 — no LoRA validation samples in release")
+
+    # ---- Gate 7: Crop size within policy bounds ----
+    if 'crop_width' in lora_samples.columns and 'crop_height' in lora_samples.columns:
+        min_crop = config.get('crop_min_size', 128) if config else 128
+        max_crop = config.get('crop_max_size', 768) if config else 768
+        invalid_crop = lora_samples[
+            (lora_samples['crop_width'] < min_crop) |
+            (lora_samples['crop_height'] < min_crop) |
+            (lora_samples['crop_width'] > max_crop) |
+            (lora_samples['crop_height'] > max_crop)
+        ]
+        if len(invalid_crop) > 0:
+            errors.append(
+                f"{len(invalid_crop)} samples with crop size outside [{min_crop}, {max_crop}]px"
+            )
+
+    # ---- Gate 8: Source share within max_source_share ----
+    if len(lora_samples) > 0:
+        max_source_share = config.get('max_source_share', 0.50) if config else 0.50
+        source_counts = lora_samples['source_id'].value_counts()
+        for source_id, count in source_counts.items():
+            share = count / len(lora_samples)
+            if share > max_source_share:
+                errors.append(
+                    f"source '{source_id}' share {share:.1%} exceeds max_source_share {max_source_share:.1%}"
+                )
+
+    # ---- Gate 9: duplicate_cluster_id overlap (LoRA ↔ benchmark) ----
+    if 'duplicate_cluster_id' in samples_df.columns:
+        lora_clusters = set(lora_train_val['duplicate_cluster_id'].dropna())
+        benchmark_clusters = set(
+            samples_df[samples_df['role'].isin(benchmark_roles)]['duplicate_cluster_id'].dropna()
+        )
+        cluster_overlap = lora_clusters & benchmark_clusters
+        if cluster_overlap:
+            errors.append(
+                f"duplicate_cluster_overlap={len(cluster_overlap)}: "
+                "same duplicate_cluster_id appears in both LoRA and frozen benchmark"
+            )
+
+    # ---- Gate 10: No split_group_id overlap across val/test ----
+    test_groups = set(samples_df[samples_df['split'] == 'test']['split_group_id'].dropna())
+    cross_val_test = val_groups & test_groups
+    if cross_val_test:
+        errors.append(
+            f"cross_val_test_group_count={len(cross_val_test)}: "
+            "same split_group_id in both val and test splits"
+        )
+    train_test_groups = train_groups & test_groups
+    if train_test_groups:
+        errors.append(
+            f"cross_train_test_group_count={len(train_test_groups)}: "
+            "same split_group_id in both train and test splits"
+        )
+
+    # ---- Gate 10b: Cross-split duplicate_cluster_id overlap (LoRA only) ----
+    if 'duplicate_cluster_id' in samples_df.columns:
+        lora_train_clusters = set(
+            samples_df[samples_df['split'] == 'train']['duplicate_cluster_id'].dropna()
+        )
+        lora_val_clusters = set(
+            samples_df[samples_df['split'] == 'val']['duplicate_cluster_id'].dropna()
+        )
+        cross_cluster = lora_train_clusters & lora_val_clusters
+        if cross_cluster:
+            errors.append(
+                f"cross_split_duplicate_cluster_count={len(cross_cluster)}: "
+                "same duplicate_cluster_id in LoRA train and val"
+            )
+
+    # ---- Gate 10c: LoRA ↔ benchmark split_group_id overlap ----
+    benchmark_group_ids = set(
+        samples_df[samples_df['role'].isin(benchmark_roles)]['split_group_id'].dropna()
+    )
+    lora_group_ids = set(lora_train_val['split_group_id'].dropna())
+    lora_benchmark_group_overlap = lora_group_ids & benchmark_group_ids
+    if lora_benchmark_group_overlap:
+        errors.append(
+            f"lora_benchmark_group_overlap={len(lora_benchmark_group_overlap)}: "
+            "same split_group_id in LoRA train/val and frozen benchmark"
+        )
+
+    # ---- Gate 10d: Zero-dimension or negative crop geometry ----
+    if 'crop_width' in lora_samples.columns and 'crop_height' in lora_samples.columns:
+        zero_dim = lora_samples[
+            (lora_samples['crop_width'] <= 0) | (lora_samples['crop_height'] <= 0)
+        ]
+        if len(zero_dim) > 0:
+            errors.append(
+                f"invalid_bbox_count={len(zero_dim)}: "
+                "samples with crop_width or crop_height <= 0"
+            )
+
+    # ---- Gate 11: Manifest hash consistency (warning only) ----
+    try:
+        import hashlib as _hashlib
+        computed_hash = _hashlib.sha256(samples_df.to_json().encode()).hexdigest()[:16]
+        stored_hash = release_meta.get('manifest_hash', '')
+        if stored_hash and computed_hash != stored_hash:
+            warnings.append(
+                f"manifest_hash mismatch: stored={stored_hash} computed={computed_hash} "
+                "(may indicate post-export modification)"
+            )
+    except Exception:
+        pass
 
     # ---- Compute stats ----
     split_counts = samples_df[samples_df['role'].isin(lora_roles)]['split'].value_counts()

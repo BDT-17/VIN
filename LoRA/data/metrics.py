@@ -12,7 +12,7 @@ DETECTION_METRIC_DIRECTIONS = {
     "ap50": "higher_is_better",
     "ap75": "higher_is_better",
     "map50_95": "higher_is_better",
-    "miss_rate": "lower_is_better",
+    "mr_minus_2": "lower_is_better",
 }
 
 

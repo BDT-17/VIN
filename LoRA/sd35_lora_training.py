@@ -116,6 +116,26 @@ def training_provenance(adapter_path=None, pt_path=None):
         payload["gpu_name"] = torch.cuda.get_device_name(0) if torch.cuda.is_available() else ""
     except Exception as exc:
         payload["torch_error"] = str(exc)
+    try:
+        import diffusers
+        payload["diffusers_version"] = diffusers.__version__
+    except Exception as exc:
+        payload["diffusers_error"] = str(exc)
+    try:
+        import datasets as _hf_datasets
+        payload["datasets_version"] = _hf_datasets.__version__
+    except Exception as exc:
+        payload["datasets_error"] = str(exc)
+    try:
+        import accelerate
+        payload["accelerate_version"] = accelerate.__version__
+    except Exception as exc:
+        payload["accelerate_error"] = str(exc)
+    try:
+        payload["training_script_sha256"] = sha256_file(Path(__file__))
+        payload["training_script_path"] = str(Path(__file__))
+    except Exception as exc:
+        payload["training_script_error"] = str(exc)
     return payload
 
 
@@ -204,7 +224,7 @@ def build_diffusers_training_command(script_path=None, dataset_release=None):
         command.extend([
             "--dataset_name", str(data_dir),
             "--caption_column", "text",
-            "--image_column", "file_name",
+            "--image_column", "image",
         ])
         print(f"Using caption-per-image training from: {metadata_path}")
     else:
@@ -246,8 +266,11 @@ def run_lora_training(script_path=None, dataset_release=None, dry_run=False):
     output_dir = Path(LORA_TRAINING_OUTPUT_DIR)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write training config
+    # Write training config and preflight artifacts
     config_path = write_training_config(output_dir=output_dir)
+    write_gpu_info(output_dir)
+    write_pip_freeze(output_dir)
+    write_validation_prompts(output_dir)
 
     # Build training command
     command = build_diffusers_training_command(
@@ -281,6 +304,10 @@ def run_lora_training(script_path=None, dataset_release=None, dry_run=False):
 
             print(f"Dataset provenance saved: {dataset_prov_path}")
 
+    # ImageFolder contract test — verify column names before committing to training
+    if dataset_release:
+        test_imagefolder_contract(dataset_release)
+
     if dry_run:
         print("=" * 60)
         print("TRAINING DRY RUN")
@@ -295,11 +322,23 @@ def run_lora_training(script_path=None, dataset_release=None, dry_run=False):
     print("STARTING LORA TRAINING")
     print("=" * 60)
 
-    # Run training
-    subprocess.run(command, check=True)
+    # Run training with live metric monitoring (hard-fails on NaN/Inf)
+    import datetime as _datetime
+    from LoRA.data.training_metrics import TrainingMonitor
+
+    _run_id = f"{LORA_TRAINING_NAME}_{_datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    _reports_base = output_dir.parent / "reports" / "training"
+    _monitor = TrainingMonitor(run_id=_run_id, reports_base=_reports_base)
+    _monitor.run(command)
 
     # Export artifacts
     adapter_path = find_lora_adapter_file(output_dir)
+    verification = verify_adapter_loadable(adapter_path)
+    (output_dir / "adapter_verification.json").write_text(
+        json.dumps(_json_safe(verification), indent=2), encoding="utf-8"
+    )
+    if not verification["loadable"]:
+        print(f"WARNING: Adapter verification failed: {verification['error']}")
     pt_path = export_lora_pt(adapter_path=adapter_path, output_dir=output_dir)
     provenance_path = write_training_provenance(
         output_dir=output_dir,
@@ -319,8 +358,173 @@ def run_lora_training(script_path=None, dataset_release=None, dry_run=False):
         "adapter_path": adapter_path,
         "pt_path": pt_path,
         "provenance_path": provenance_path,
+        "training_run_id": _run_id,
+        "training_reports_dir": str(_reports_base / _run_id),
     }
 
 
+def test_imagefolder_contract(release_dir) -> None:
+    """Verify ImageFolder dataset loads with the columns the trainer expects.
+
+    Raises:
+        RuntimeError: if 'image' or 'text' columns are missing, or dataset is empty.
+    """
+    try:
+        from datasets import load_dataset as _load_dataset
+    except ImportError as exc:
+        raise ImportError("Install datasets: pip install datasets") from exc
+
+    train_dir = Path(release_dir) / "lora_train"
+    if not train_dir.exists():
+        raise RuntimeError(f"lora_train/ not found in release: {release_dir}")
+
+    print("ImageFolder contract test...")
+    ds = _load_dataset("imagefolder", data_dir=str(train_dir), split="train")
+
+    if "image" not in ds.column_names:
+        raise RuntimeError(
+            f"Expected column 'image' after imagefolder load, got: {ds.column_names}. "
+            "Trainer must use --image_column image (not file_name)."
+        )
+    if "text" not in ds.column_names:
+        raise RuntimeError(
+            f"Expected column 'text' after imagefolder load, got: {ds.column_names}. "
+            "Exporter must write 'text' field in metadata.jsonl."
+        )
+    if len(ds) == 0:
+        raise RuntimeError("ImageFolder dataset loaded 0 samples from lora_train/")
+
+    print(f"  ✓ ImageFolder contract OK: {len(ds)} samples, columns={ds.column_names}")
+
+
+def write_pip_freeze(output_dir) -> Path:
+    """Write pip freeze snapshot to pip_freeze.txt."""
+    import subprocess as _subprocess
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / "pip_freeze.txt"
+    result = _subprocess.run(
+        [sys.executable, "-m", "pip", "freeze"],
+        capture_output=True, text=True, timeout=60,
+    )
+    path.write_text(result.stdout, encoding="utf-8")
+    return path
+
+
+def write_gpu_info(output_dir) -> Path:
+    """Write GPU hardware info to gpu_info.json."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    info = {}
+    try:
+        import torch
+        info["cuda_available"] = bool(torch.cuda.is_available())
+        info["cuda_device_count"] = int(torch.cuda.device_count()) if torch.cuda.is_available() else 0
+        if torch.cuda.is_available():
+            props = torch.cuda.get_device_properties(0)
+            info["gpu_name"] = props.name
+            info["gpu_total_memory_gb"] = round(props.total_memory / (1024 ** 3), 2)
+            info["cuda_version"] = torch.version.cuda
+            info["torch_version"] = torch.__version__
+    except Exception as exc:
+        info["error"] = str(exc)
+    path = output_dir / "gpu_info.json"
+    path.write_text(json.dumps(_json_safe(info), indent=2, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def write_validation_prompts(output_dir) -> Path:
+    """Write validation prompt config to validation_prompts.json."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "trigger_token": LORA_TRIGGER_TOKEN,
+        "prompt_prefix": LORA_PROMPT_PREFIX,
+        "validation_prompt": LORA_TRAINING_VALIDATION_PROMPT,
+        "prompts": [
+            f"{LORA_TRIGGER_TOKEN} full-body pedestrian on city sidewalk, realistic photo",
+            f"{LORA_TRIGGER_TOKEN} pedestrian crossing road, urban environment",
+            f"{LORA_TRIGGER_TOKEN} pedestrian in crowd, busy street scene",
+            f"{LORA_TRIGGER_TOKEN} distant pedestrian on footpath, surveillance camera angle",
+        ],
+    }
+    path = output_dir / "validation_prompts.json"
+    path.write_text(json.dumps(_json_safe(payload), indent=2, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def verify_adapter_loadable(adapter_path) -> dict:
+    """Check that an adapter file exists, has keys, and can be parsed by safetensors.
+
+    Does NOT require a running SD3.5 pipeline — safe to call post-training on any machine.
+    """
+    adapter_path = Path(adapter_path)
+    result = {
+        "adapter_path": str(adapter_path),
+        "exists": adapter_path.exists(),
+        "sha256": "",
+        "key_count": 0,
+        "loadable": False,
+        "error": "",
+    }
+
+    if not adapter_path.exists():
+        result["error"] = "adapter file not found"
+        return result
+
+    result["sha256"] = sha256_file(adapter_path)
+
+    try:
+        if adapter_path.suffix == ".safetensors":
+            from safetensors import safe_open
+            with safe_open(str(adapter_path), framework="pt", device="cpu") as f:
+                keys = list(f.keys())
+            result["key_count"] = len(keys)
+            if not keys:
+                result["error"] = "adapter has 0 keys"
+            else:
+                result["loadable"] = True
+                print(f"  ✓ Adapter loadable: {len(keys)} LoRA keys")
+        else:
+            import torch
+            sd = torch.load(str(adapter_path), map_location="cpu", weights_only=True)
+            result["key_count"] = len(sd) if hasattr(sd, '__len__') else -1
+            result["loadable"] = True
+    except Exception as exc:
+        result["error"] = str(exc)
+
+    return result
+
+
 if __name__ == "__main__":
-    run_lora_training(dry_run=not bool(LORA_TRAINING_ENABLED))
+    import argparse as _argparse
+
+    _parser = _argparse.ArgumentParser(description="SD3.5 LoRA training helper")
+    _parser.add_argument(
+        "--dataset-release",
+        type=str,
+        default=None,
+        help="Path to validated dataset release directory (required unless --legacy-data-dir)",
+    )
+    _parser.add_argument(
+        "--legacy-data-dir",
+        action="store_true",
+        help="Allow fallback to LORA_TRAINING_DATA_DIR (bypasses --dataset-release requirement)",
+    )
+    _parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Build and print training command without executing",
+    )
+    _args = _parser.parse_args()
+
+    if _args.dataset_release is None and not _args.legacy_data_dir:
+        _parser.error(
+            "--dataset-release is required. "
+            "Pass --legacy-data-dir to allow fallback to LORA_TRAINING_DATA_DIR."
+        )
+
+    run_lora_training(
+        dataset_release=_args.dataset_release,
+        dry_run=_args.dry_run,
+    )

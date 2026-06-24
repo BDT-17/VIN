@@ -365,8 +365,8 @@ LORA_CONFIG = {
  'LORA_ADAPTER_NAME': 'vinped_v1',
  'LORA_SCALE': 0.7,
  'LORA_FUSE': False,
- 'LORA_TRIGGER_TOKEN': 'vinped_v1',
- 'LORA_PROMPT_PREFIX': 'pedestrian'}
+ 'LORA_TRIGGER_TOKEN': '<vin_ped>',
+ 'LORA_PROMPT_PREFIX': '<vin_ped> pedestrian'}
 
 LORA_TRAINING_CONFIG = {
  'LORA_TRAINING_ENABLED': False,
@@ -375,7 +375,7 @@ LORA_TRAINING_CONFIG = {
  'LORA_TRAINING_OUTPUT_DIR': Path('/kaggle/working/sd35m-pedestrian-v1'),
  'LORA_TRAINING_IMAGE_COLUMN': 'image_path',
  'LORA_TRAINING_CAPTION_COLUMN': 'caption',
- 'LORA_TRAINING_VALIDATION_PROMPT': 'vinped_v1 full-body pedestrian in an urban street scene',
+ 'LORA_TRAINING_VALIDATION_PROMPT': '<vin_ped> full-body pedestrian in an urban street scene',
  'LORA_TRAINING_RESOLUTION': 512,
  'LORA_TRAINING_MIXED_PRECISION': 'fp16',
  'LORA_TRAINING_BATCH_SIZE': 1,

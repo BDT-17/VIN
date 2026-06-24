@@ -191,26 +191,46 @@ def create_split_locks(
 ) -> pd.DataFrame:
     """Create split locks for benchmark-protected samples.
 
-    Benchmark-locked samples must be excluded from training.
+    Uses original_split from the source dataset (not the randomly assigned split)
+    to determine which samples become detector_val_real_frozen vs detector_test_real_frozen.
+    ALL benchmark-source images are excluded from LoRA training regardless of original_split.
 
     Returns:
-        samples_df with updated 'role' for locked samples
+        samples_df with updated 'role' and corrected 'split' for locked samples
     """
-    # Find benchmark images
-    benchmark_image_ids = images_df[
-        images_df['source_id'].isin(benchmark_locked_sources)
-    ]['image_id'].tolist()
+    benchmark_mask = images_df['source_id'].isin(benchmark_locked_sources)
+    benchmark_image_ids = set(images_df[benchmark_mask]['image_id'])
 
-    # Update roles for benchmark samples
+    if not benchmark_image_ids:
+        return samples_df
+
+    # Build original_split lookup; normalize 'valid' → 'val' for uniformity
+    original_split_map = (
+        images_df[benchmark_mask]
+        .set_index('image_id')['original_split']
+        .str.replace(r'^valid$', 'val', regex=True)
+    )
+
+    samples_df = samples_df.copy()
     is_benchmark = samples_df['image_id'].isin(benchmark_image_ids)
 
-    # Assign benchmark roles
+    # Override randomly-assigned split with authoritative original_split
+    samples_df.loc[is_benchmark, 'split'] = (
+        samples_df.loc[is_benchmark, 'image_id'].map(original_split_map)
+    )
+
+    # Assign frozen benchmark roles based on corrected original split
     samples_df.loc[is_benchmark & (samples_df['split'] == 'val'), 'role'] = 'detector_val_real_frozen'
     samples_df.loc[is_benchmark & (samples_df['split'] == 'test'), 'role'] = 'detector_test_real_frozen'
 
-    # Remove benchmark images from LoRA training/validation
+    # Remove ALL benchmark images that still carry a LoRA role (original train split)
     samples_df = samples_df[
         ~(is_benchmark & samples_df['role'].isin(['lora_positive', 'lora_val']))
     ]
+
+    locked_val = (samples_df['role'] == 'detector_val_real_frozen').sum()
+    locked_test = (samples_df['role'] == 'detector_test_real_frozen').sum()
+    print(f"  Benchmark locked: {locked_val} val_frozen, {locked_test} test_frozen "
+          f"(from original_split, not random assignment)")
 
     return samples_df
