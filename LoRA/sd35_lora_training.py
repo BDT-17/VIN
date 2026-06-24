@@ -155,18 +155,35 @@ def write_training_config(output_dir=None):
     return path
 
 
-def build_diffusers_training_command(script_path=None):
-    """Build a conservative T4-safe SD3.5 LoRA training command."""
+def build_diffusers_training_command(script_path=None, dataset_release=None):
+    """Build a caption-aware SD3.5 LoRA training command.
+
+    Args:
+        script_path: Path to training script
+        dataset_release: Path to validated dataset release (ImageFolder format)
+
+    Returns:
+        Command list for subprocess
+    """
     script_path = Path(script_path or os.environ.get("SD35_LORA_TRAIN_SCRIPT", "train_dreambooth_lora_sd3.py"))
-    data_dir = Path(LORA_TRAINING_DATA_DIR)
+
+    # If dataset_release provided, use it; otherwise fall back to old config
+    if dataset_release:
+        data_dir = Path(dataset_release) / "lora_train"
+
+        # Validate release before training
+        from LoRA.data.validate import require_validated_release
+        require_validated_release(Path(dataset_release))
+    else:
+        data_dir = Path(LORA_TRAINING_DATA_DIR)
+
     output_dir = Path(LORA_TRAINING_OUTPUT_DIR)
+
     command = [
         sys.executable,
         str(script_path),
         "--pretrained_model_name_or_path", str(SD35_MODEL_ID),
-        "--instance_data_dir", str(data_dir),
         "--output_dir", str(output_dir),
-        "--instance_prompt", str(LORA_TRAINING_VALIDATION_PROMPT),
         "--resolution", str(int(LORA_TRAINING_RESOLUTION)),
         "--train_batch_size", str(int(LORA_TRAINING_BATCH_SIZE)),
         "--gradient_accumulation_steps", str(int(LORA_TRAINING_GRADIENT_ACCUMULATION_STEPS)),
@@ -179,36 +196,124 @@ def build_diffusers_training_command(script_path=None):
         "--seed", str(int(LORA_TRAINING_SEED)),
         "--mixed_precision", str(LORA_TRAINING_MIXED_PRECISION),
     ]
+
+    # Use caption-aware training if metadata.jsonl exists
+    metadata_path = data_dir / "metadata.jsonl"
+    if metadata_path.exists():
+        # Caption-per-image mode
+        command.extend([
+            "--dataset_name", str(data_dir),
+            "--caption_column", "text",
+            "--image_column", "file_name",
+        ])
+        print(f"Using caption-per-image training from: {metadata_path}")
+    else:
+        # Legacy instance_data_dir mode
+        command.extend([
+            "--instance_data_dir", str(data_dir),
+            "--instance_prompt", str(LORA_TRAINING_VALIDATION_PROMPT),
+        ])
+        print(f"Using legacy instance_data_dir mode: {data_dir}")
+
+    # Add optional flags
     if LORA_TRAINING_GRADIENT_CHECKPOINTING:
         command.append("--gradient_checkpointing")
     if LORA_TRAINING_USE_8BIT_ADAM:
         command.append("--use_8bit_adam")
     if LORA_TRAINING_TRAIN_TEXT_ENCODER:
         command.append("--train_text_encoder")
+    if LORA_TRAINING_CACHE_LATENTS:
+        command.append("--cache_latents")
+
+    # Add dropout if configured
+    if LORA_TRAINING_DROPOUT > 0:
+        command.extend(["--lora_dropout", str(float(LORA_TRAINING_DROPOUT))])
+
     return command
 
 
-def run_lora_training(script_path=None, dry_run=False):
-    """Run SD3.5 LoRA training, then export the adapter as both native and .pt artifacts."""
+def run_lora_training(script_path=None, dataset_release=None, dry_run=False):
+    """Run SD3.5 LoRA training with caption-aware dataset support.
+
+    Args:
+        script_path: Path to training script
+        dataset_release: Path to validated dataset release directory
+        dry_run: If True, only prepare command without running
+
+    Returns:
+        Dictionary with training artifacts
+    """
     output_dir = Path(LORA_TRAINING_OUTPUT_DIR)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write training config
     config_path = write_training_config(output_dir=output_dir)
-    command = build_diffusers_training_command(script_path=script_path)
+
+    # Build training command
+    command = build_diffusers_training_command(
+        script_path=script_path,
+        dataset_release=dataset_release,
+    )
+
+    # Save command
     command_path = output_dir / "train_command.json"
     command_path.write_text(json.dumps(command, indent=2), encoding="utf-8")
+
+    # Log dataset provenance if using release
+    if dataset_release:
+        release_meta_path = Path(dataset_release) / "release.json"
+        if release_meta_path.exists():
+            with open(release_meta_path) as f:
+                release_meta = json.load(f)
+
+            provenance = {
+                "dataset_release": str(dataset_release),
+                "release_name": release_meta.get("release_name"),
+                "release_version": release_meta.get("release_version"),
+                "dataset_status": release_meta.get("dataset_status"),
+                "manifest_hash": release_meta.get("manifest_hash"),
+                "git_commit": release_meta.get("git_commit"),
+            }
+
+            dataset_prov_path = output_dir / "dataset_provenance.json"
+            with open(dataset_prov_path, 'w') as f:
+                json.dump(provenance, f, indent=2)
+
+            print(f"Dataset provenance saved: {dataset_prov_path}")
+
     if dry_run:
-        print("Training dry run. Config written to:", config_path)
-        print("Training dry run. Command written to:", command_path)
-        print(" ".join(command))
+        print("=" * 60)
+        print("TRAINING DRY RUN")
+        print("=" * 60)
+        print(f"Config: {config_path}")
+        print(f"Command: {command_path}")
+        print("\nCommand:")
+        print(" \\\n  ".join(command))
         return {"command": command, "command_path": command_path, "config_path": config_path}
 
+    print("=" * 60)
+    print("STARTING LORA TRAINING")
+    print("=" * 60)
+
+    # Run training
     subprocess.run(command, check=True)
+
+    # Export artifacts
     adapter_path = find_lora_adapter_file(output_dir)
     pt_path = export_lora_pt(adapter_path=adapter_path, output_dir=output_dir)
-    provenance_path = write_training_provenance(output_dir=output_dir, adapter_path=adapter_path, pt_path=pt_path)
-    print("LoRA adapter:", adapter_path)
-    print("LoRA .pt model:", pt_path)
-    print("Training provenance:", provenance_path)
+    provenance_path = write_training_provenance(
+        output_dir=output_dir,
+        adapter_path=adapter_path,
+        pt_path=pt_path,
+    )
+
+    print("\n" + "=" * 60)
+    print("TRAINING COMPLETE")
+    print("=" * 60)
+    print(f"LoRA adapter: {adapter_path}")
+    print(f"LoRA .pt model: {pt_path}")
+    print(f"Training provenance: {provenance_path}")
+
     return {
         "command": command,
         "adapter_path": adapter_path,

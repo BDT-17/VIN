@@ -12,7 +12,7 @@ This folder is an isolated copy of the current SD3.5 CityPersons augmentation fl
 
 ## Scope
 
-This folder is an inference/evaluation harness for an already-trained LoRA adapter. It does not include LoRA training, data preparation, or captioning. Keep training/data-prep scripts separate until they are ready to be integrated deliberately.
+This folder contains the full LoRA pipeline: data ingestion, deduplication, split locking, caption generation, dataset export, training, and metrics/reporting. The `data/` subdirectory holds the data contract implementation (sources.yaml, parsers, dedupe, splits, captions, export, metrics). `sd35_lora_training.py` is the training/export entrypoint.
 
 Because this folder copies the root SD3.5 pipeline, bug fixes in the root flow can drift from the LoRA flow. When changing shared placement, scale, compositing, or validation behavior, port and test the same change in both places or extract a shared module first.
 
@@ -28,8 +28,8 @@ LORA_CONFIG = {
     "LORA_ADAPTER_NAME": "citypersons_lora",
     "LORA_SCALE": 0.7,
     "LORA_FUSE": False,
-    "LORA_TRIGGER_TOKEN": "cityperson_lora",
-    "LORA_PROMPT_PREFIX": "cityperson_lora pedestrian",
+    "LORA_TRIGGER_TOKEN": "<vin_ped>",
+    "LORA_PROMPT_PREFIX": "<vin_ped> pedestrian",
 }
 ```
 
