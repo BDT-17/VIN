@@ -171,13 +171,13 @@ def compute_scale_score(mask_bbox, metadata=None):
     )
     if expected_height is None or expected_height <= 0:
         return {
-            "scale_score": 1.0,
+            "scale_score": None,
             "scale_available": False,
             "scale_warning": "missing_expected_height",
             "expected_height": "",
             "actual_height": round(actual_height, 4),
             "scale_relative_error": "",
-            "scale_valid": True,
+            "scale_valid": False,
         }
 
     relative_error = abs(actual_height - expected_height) / max(1.0, expected_height)
@@ -246,11 +246,22 @@ def compute_affordance_score(image_size, pasted_mask=None, insert_bbox=None, met
     scale = compute_scale_score(mask_bbox, metadata=metadata)
     occlusion = compute_occlusion_score(mask_bbox, mask_area, image_size, metadata=metadata)
     weights = AFFORDANCE_SCORE_WEIGHTS
-    affordance_score = (
-        float(weights.get("placement", 0.4)) * float(placement["placement_score"])
-        + float(weights.get("scale", 0.4)) * float(scale["scale_score"])
-        + float(weights.get("occlusion", 0.2)) * float(occlusion["occlusion_score"])
-    )
+    _scale_val = scale.get("scale_score")
+    if _scale_val is None:
+        # Scale unavailable: reweight placement and occlusion proportionally
+        _p_w = float(weights.get("placement", 0.4))
+        _o_w = float(weights.get("occlusion", 0.2))
+        _sum_w = _p_w + _o_w
+        affordance_score = (
+            _p_w / _sum_w * float(placement["placement_score"])
+            + _o_w / _sum_w * float(occlusion["occlusion_score"])
+        )
+    else:
+        affordance_score = (
+            float(weights.get("placement", 0.4)) * float(placement["placement_score"])
+            + float(weights.get("scale", 0.4)) * float(_scale_val)
+            + float(weights.get("occlusion", 0.2)) * float(occlusion["occlusion_score"])
+        )
     metrics = {
         **placement,
         **scale,

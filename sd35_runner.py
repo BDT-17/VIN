@@ -271,6 +271,13 @@ def run_augmentation_jobs_on_device(device, jobs, total_jobs, backend):
 
 def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKEND, target_per_bucket=AUGMENTATIONS_PER_BUCKET, target_splits=TARGET_SPLITS, write_manifest_file=True, return_manifest_rows=False):
     global LAST_MANIFEST_ROWS, LAST_REJECT_HISTOGRAM, LAST_AUGMENTATION_SUMMARY
+    _forbidden = [s for s in (target_splits or []) if s in ("test", "val", "valid")]
+    if _forbidden:
+        raise ValueError(
+            f"Benchmark contamination gate: target_splits contains {_forbidden}. "
+            "Augmentation must only run on 'train' splits. "
+            "If this is intentional research, set TARGET_SPLITS explicitly and remove this check."
+        )
     if not records:
         raise FileNotFoundError("No images found. Mount dataset folder and rerun scan_dataset().")
     devices = resolve_augmentation_devices()
@@ -399,12 +406,29 @@ def summarize_quality_rows(rows):
     def values(key):
         return np.array([float(row.get(key, 0.0) or 0.0) for row in accepted_rows], dtype=np.float32)
 
+    def values_non_null(key):
+        vals = [row.get(key) for row in accepted_rows if row.get(key) is not None]
+        return np.array([float(v) for v in vals], dtype=np.float32)
+
     summary = {"count": len(accepted_rows)}
-    for key in ("person_score", "scale_score", "background_score", "edge_score", "quality_score"):
+    for key in ("person_score", "background_score", "edge_score", "quality_score"):
         arr = values(key)
         short = key.replace("_score", "")
         summary[f"{short}_mean"] = round(float(arr.mean()), 4)
         summary[f"{short}_p10"] = round(float(np.percentile(arr, 10)), 4)
+
+    # scale_score: exclude None (unavailable) samples from mean; report coverage separately
+    _scale_arr = values_non_null("scale_score")
+    _scale_total = len(accepted_rows)
+    _scale_available = len(_scale_arr)
+    summary["scale_coverage_rate"] = round(_scale_available / _scale_total, 4) if _scale_total else 0.0
+    if _scale_available:
+        summary["scale_mean"] = round(float(_scale_arr.mean()), 4)
+        summary["scale_p10"] = round(float(np.percentile(_scale_arr, 10)), 4)
+    else:
+        summary["scale_mean"] = None
+        summary["scale_p10"] = None
+
     return summary
 
 
