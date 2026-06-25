@@ -76,10 +76,50 @@ def bbox_mask(size: Tuple[int, int], bboxes: List[Tuple[int, int, int, int]],
     return mask
 
 
-def random_placement(image_size: Tuple[int, int], seed: int, index: int = 0,
-                     cfg: PlacementConfig = None):
-    """Sample 1..N constrained person bboxes + the combined bbox mask.
+def _capsule(draw, p, q, r):
+    """Thick rounded line (limb) from p to q with radius r."""
+    draw.line([p, q], fill=255, width=int(max(1, 2 * r)))
+    for c in (p, q):
+        draw.ellipse([c[0]-r, c[1]-r, c[0]+r, c[1]+r], fill=255)
 
+
+def silhouette_mask(size: Tuple[int, int], bboxes, skeletons,
+                    dilate_px: int = 6) -> "Image.Image":
+    """Person-shaped mask: ellipse head/torso + capsule limbs around each
+    skeleton, dilated. Tighter than a bbox so the editor fills a human shape
+    instead of a rectangle.
+
+    skeleton order (from skeleton_points):
+        0 head, 1 neck, 2 hip, 3 sh_l, 4 sh_r, 5 hand_l, 6 hand_r, 7 foot_l, 8 foot_r
+    """
+    from PIL import Image, ImageDraw, ImageFilter
+    W, H = size
+    mask = Image.new("L", (W, H), 0)
+    d = ImageDraw.Draw(mask)
+    for (x1, y1, x2, y2), sk in zip(bboxes, skeletons):
+        bw, bh = (x2 - x1), (y2 - y1)
+        head, neck, hip, sh_l, sh_r, hand_l, hand_r, foot_l, foot_r = sk
+        head_r = max(2, int(bw * 0.18))
+        limb_r = max(2, int(bw * 0.12))
+        # head
+        d.ellipse([head[0]-head_r, head[1]-head_r, head[0]+head_r, head[1]+head_r], fill=255)
+        # torso (neck -> hip) as a wide ellipse
+        torso_w = bw * 0.5
+        d.ellipse([neck[0]-torso_w/2, neck[1], hip[0]+torso_w/2, hip[1]], fill=255)
+        # arms + legs as capsules
+        _capsule(d, neck, sh_l, limb_r); _capsule(d, sh_l, hand_l, limb_r)
+        _capsule(d, neck, sh_r, limb_r); _capsule(d, sh_r, hand_r, limb_r)
+        _capsule(d, hip, foot_l, limb_r); _capsule(d, hip, foot_r, limb_r)
+    if dilate_px > 0:
+        mask = mask.filter(ImageFilter.MaxFilter(dilate_px * 2 + 1))
+    return mask
+
+
+def random_placement(image_size: Tuple[int, int], seed: int, index: int = 0,
+                     cfg: PlacementConfig = None, mask_shape: str = "silhouette"):
+    """Sample 1..N constrained person placements + a mask.
+
+    mask_shape: 'silhouette' (person-shaped, recommended) or 'bbox' (rectangle).
     Returns: (mask: PIL 'L', bboxes: list, skeletons: list[list[pt]])
     """
     cfg = cfg or PlacementConfig()
@@ -88,7 +128,10 @@ def random_placement(image_size: Tuple[int, int], seed: int, index: int = 0,
     n = rng.randint(cfg.min_people, cfg.max_people + 1)
     bboxes = [sample_person_bbox(W, H, rng, cfg) for _ in range(n)]
     skeletons = [skeleton_points(b) for b in bboxes]
-    mask = bbox_mask((W, H), bboxes, pad_frac=cfg.bbox_pad_frac)
+    if mask_shape == "bbox":
+        mask = bbox_mask((W, H), bboxes, pad_frac=cfg.bbox_pad_frac)
+    else:
+        mask = silhouette_mask((W, H), bboxes, skeletons)
     return mask, bboxes, skeletons
 
 

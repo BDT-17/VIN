@@ -8,10 +8,10 @@ base_model_id: stabilityai/stable-diffusion-3.5-medium
 model_name: vinped_sd35m_edit_v1
 
 resolution: 512
-rank: 8
+rank: 16                 # was 8 — stronger adapter (1000-step/rank-8 was too weak)
 learning_rate: 1.0e-4
-max_train_steps: 1000
-checkpointing_steps: 250
+max_train_steps: 3000    # was 1000 — loss barely moved; needs more steps
+checkpointing_steps: 500
 seed: 42
 grad_clip_norm: 1.0
 

@@ -49,3 +49,29 @@ def test_count_within_config():
     _, bboxes, sk = random_placement((512, 512), seed=99, index=0, cfg=cfg)
     assert 1 <= len(bboxes) <= 3
     assert len(sk) == len(bboxes)
+
+
+def test_silhouette_is_person_shaped_not_full_bbox():
+    from LoRA.inference.random_skeleton import silhouette_mask
+    W, H = 256, 256
+    bboxes = [(80, 40, 140, 200)]
+    from LoRA.inference.random_skeleton import skeleton_points
+    sk = [skeleton_points(b) for b in bboxes]
+    m = np.asarray(silhouette_mask((W, H), bboxes, sk, dilate_px=2))
+    white = (m > 127)
+    # head region masked
+    assert white[55:70, 100:120].any()
+    # nothing outside the image / outside the person column
+    assert not white[:, :60].any() and not white[:, 170:].any()
+    # silhouette covers LESS than the full bbox rectangle (person-shaped)
+    bbox_area = (140 - 80) * (200 - 40)
+    assert white.sum() < 0.95 * bbox_area
+
+
+def test_random_placement_mask_shapes_differ():
+    bb, _, _ = random_placement((256, 256), seed=5, index=0, mask_shape='bbox')
+    si, _, _ = random_placement((256, 256), seed=5, index=0, mask_shape='silhouette')
+    a = np.asarray(bb) > 127
+    b = np.asarray(si) > 127
+    # same placement (same seed/index) but silhouette fills fewer pixels than bbox
+    assert b.sum() < a.sum()
