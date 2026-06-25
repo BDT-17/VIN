@@ -2,6 +2,12 @@
 
 No V5 metrics here (no placement_score / affordance_score / scale_correction /
 harmonization_score). Component metrics only — never a single fused score.
+
+With hard-restore on (default), the result's background outside the mask equals
+the input (source_img). PIPE's source and target differ only inside the object
+region, so `outside_mask_mae` vs the target reference stays ~0 — i.e. it verifies
+both that hard-restore held and that the derived mask covers the object. The
+informative signals are then the person_* and edge_seam metrics inside the mask.
 """
 
 from pathlib import Path

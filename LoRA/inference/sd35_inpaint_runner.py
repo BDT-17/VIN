@@ -1,9 +1,11 @@
 """Raw SD3.5 inpaint runner for the paired baseline-vs-LoRA evaluation.
 
-This is intentionally minimal: it calls StableDiffusion3InpaintPipeline directly.
-It does NOT do hard background restoration, mask refinement, harmonization, or
-ghost validation — those belong to the inpaint/ AI-Replace flow, not here. The
-only difference between conditions B0 and B1 is the trigger token in the prompt.
+This is intentionally minimal: it calls StableDiffusion3InpaintPipeline directly,
+plus an optional HARD-RESTORE composite so the background outside the mask is
+preserved 100% by construction (`result = input*(1-mask) + generated*mask`).
+It does NOT do mask refinement, harmonization, or ghost validation — those
+belong to the inpaint/ AI-Replace flow, not here. The only difference between
+conditions B0 and B1 is the trigger token in the prompt (B1 also attaches LoRA).
 
   B0: SD3.5 Inpaint            (no LoRA)
   B1: SD3.5 Inpaint + vinped LoRA
@@ -32,6 +34,25 @@ def render_inpaint_prompt(template: str, fields: Dict, trigger: str) -> str:
         text = text.replace("{" + k + "}", v or "")
     parts = [p.strip() for p in text.split(",")]
     return ", ".join(p for p in parts if p)
+
+
+def hard_restore(generated, original, mask):
+    """Composite: keep generated pixels inside the mask, ORIGINAL pixels outside.
+
+        result = original * (1 - mask) + generated * mask
+
+    This guarantees the background outside the mask is preserved 100% by
+    construction — the model never gets to change it. `mask` is grayscale where
+    white (255) == the editable (inpaint) region.
+    """
+    from PIL import Image
+    import numpy as np
+    g = np.asarray(generated.convert("RGB"), dtype=np.float32)
+    o = np.asarray(original.convert("RGB").resize(generated.size), dtype=np.float32)
+    m = np.asarray(mask.convert("L").resize(generated.size), dtype=np.float32) / 255.0
+    m = m[:, :, None]
+    out = o * (1.0 - m) + g * m
+    return Image.fromarray(out.clip(0, 255).astype("uint8"))
 
 
 class SD35InpaintRunner:
@@ -94,6 +115,9 @@ class SD35InpaintRunner:
         runtime = time.time() - t0
         # restore to original resolution for metric comparison vs reference
         result = result.resize(image.size)
+        # Hard-restore: keep ORIGINAL background outside the mask (100% preserve).
+        if cfg.get("hard_restore", True):
+            result = hard_restore(result, image, mask)
         return {"image": result, "runtime_seconds": round(runtime, 3),
                 "cuda_peak_mb": _cuda_peak_mb()}
 

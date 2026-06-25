@@ -100,6 +100,15 @@ Settings live under `configs/inpaint_eval.yaml: pipe_eval`.
 > person) is a reconstruction proxy and is kept for that flow; PIPE is the real
 > golden set for "add a person to a background".
 
+**Background preservation = hard-restore, not learned.** The final task ("add a
+person, keep the background 100%") is achieved at inference, not by training: the
+runner composites `result = input*(1-mask) + generated*mask` (config
+`hard_restore: true`), so the LoRA only fills inside the mask and the background
+outside is preserved byte-for-byte. The LoRA's job is the person quality inside
+the mask; the restore guarantees the background. (PIPE's source/target differ
+only inside the object region, so `outside_mask_mae` vs the target reference
+stays ~0 and effectively verifies the restore + the derived mask.)
+
 Runs B0 then B1 with **identical** image/mask/prompt-fields/seed/resolution/
 strength/guidance/steps/negative-prompt — only the trigger token differs (B1 also
 attaches the LoRA adapter). Per-case metrics (component metrics only, no fused

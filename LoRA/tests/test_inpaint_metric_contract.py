@@ -47,6 +47,23 @@ def test_background_change_outside_mask_is_penalized(tmp_path):
     assert m["outside_mask_mae"] > 0.0
 
 
+def test_hard_restore_preserves_background_exactly():
+    from LoRA.inference.sd35_inpaint_runner import hard_restore
+    original = Image.fromarray(np.full((64, 64, 3), 100, dtype=np.uint8))
+    generated = Image.fromarray(np.full((64, 64, 3), 200, dtype=np.uint8))  # totally different
+    mask_arr = np.zeros((64, 64), dtype=np.uint8)
+    mask_arr[20:40, 20:40] = 255  # editable region
+    mask = Image.fromarray(mask_arr)
+    out = np.asarray(hard_restore(generated, original, mask))
+    # inside mask -> generated
+    assert out[30, 30, 0] == 200
+    # outside mask -> original, byte-for-byte
+    assert out[0, 0, 0] == 100
+    assert out[50, 50, 0] == 100
+    outside = mask_arr < 128
+    assert (out[outside] == 100).all()
+
+
 def test_paired_comparison_delta_direction(tmp_path):
     baseline = [{"case_id": "c1", "seed": 42, "person_confidence": 0.5, "outside_mask_mae": 2.0}]
     lora = [{"case_id": "c1", "seed": 42, "person_confidence": 0.8, "outside_mask_mae": 3.0}]

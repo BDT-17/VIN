@@ -12,6 +12,11 @@ guidance_scale: 7.5
 num_inference_steps: 30
 seed_list: [42, 43, 44]
 
+# Hard-restore: composite original background outside the mask -> 100% preserve
+# by construction. The model only fills inside the mask. This is how "preserve
+# 100% bg" is achieved (the LoRA learns the person; restore keeps the bg).
+hard_restore: true
+
 # Real golden eval set built from PIPE (target_img is a real photo -> a true
 # ground truth, not another model's output). See build_eval_cases_pipe.py.
 evaluation_release: /kaggle/working/vin_lora/eval/pipe_eval_v1
