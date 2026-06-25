@@ -15,6 +15,5 @@ env/
 # OS files
 .DS_Store
 Thumbs.db
-train/
 .codex/
 .agents/

@@ -5,7 +5,7 @@ release_name: pedestrian_lora_v1
 #   inpaint_eval        -> frozen SD3.5 inpaint evaluation (never trains LoRA)
 sources:
   - source_id: citypersons
-    kaggle_mount: /kaggle/input/citypersons-canonical
+    kaggle_mount: /kaggle/input/datasets/muttahirulislam/citypersons-dataset-with-bg-image/yolo_dir/yolo_dir
     parser: yolo
     source_type: pedestrian_detection
     group_strategy: original_scene
@@ -27,7 +27,7 @@ sources:
       test: test/labels
 
   - source_id: mot17_02
-    kaggle_mount: /kaggle/input/mot17-02-fcrnn
+    kaggle_mount: /kaggle/input/datasets/kyoru4444/mot17-02-fcrnn
     parser: mot
     source_type: video_tracking
     group_strategy: sequence_time_window
@@ -43,7 +43,7 @@ sources:
     gt_dir: MOT17-02-FRCNN/gt
 
   - source_id: human_detection
-    kaggle_mount: /kaggle/input/human-detection-dataset
+    kaggle_mount: /kaggle/input/datasets/constantinwerner/human-detection-dataset/human detection dataset
     parser: classification_folders
     source_type: binary_classification
     positive_dir: "1"
