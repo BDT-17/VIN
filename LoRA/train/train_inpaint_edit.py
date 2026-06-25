@@ -104,19 +104,27 @@ def run_training(work_dir, base_model_id=None, hf_token=None, train_config_path=
             t = torch.from_numpy(a)[None]
         return t.unsqueeze(0).to(device, dtype=compute_dtype)
 
-    # ---- precompute embeddings, then drop text encoders (T4 memory) ----
+    # ---- precompute embeddings to DISK, then drop text encoders ----
+    # Caching all embeds in CPU RAM OOMs at scale (each SD3 embed ~2-3MB; 4000 ->
+    # ~11GB). Write each UNIQUE prompt's embed to a .pt on disk and load the small
+    # per-step tensor lazily in the loop. RAM stays flat regardless of dataset size.
+    emb_dir = run_dir / "_emb_cache"; emb_dir.mkdir(exist_ok=True)
+    uniq_prompts = list(dict.fromkeys(it["prompt"] for it in pairs))
+    prompt_to_id = {p: i for i, p in enumerate(uniq_prompts)}
     pipe.text_encoder.to(device); pipe.text_encoder_2.to(device)
     if pipe.text_encoder_3 is not None:
         pipe.text_encoder_3.to(device)
-    embeds = []
     with torch.no_grad():
-        for it in pairs:
+        for p, pid in prompt_to_id.items():
             pe, _, pooled, _ = pipe.encode_prompt(
-                it["prompt"], prompt_2=it["prompt"], prompt_3=it["prompt"],
-                device=device, num_images_per_prompt=1, do_classifier_free_guidance=False)
-            embeds.append((pe.to("cpu"), pooled.to("cpu")))
+                p, prompt_2=p, prompt_3=p, device=device,
+                num_images_per_prompt=1, do_classifier_free_guidance=False)
+            torch.save({"pe": pe.to("cpu"), "pooled": pooled.to("cpu")},
+                       emb_dir / f"{pid}.pt")
+            del pe, pooled
     pipe.text_encoder = pipe.text_encoder_2 = pipe.text_encoder_3 = None
     import gc; gc.collect(); torch.cuda.empty_cache()
+    print(f"  cached {len(uniq_prompts)} unique prompt embeds to disk")
 
     vae, transformer = pipe.vae, pipe.transformer
     vae.to(device); transformer.to(device)
@@ -161,7 +169,8 @@ def run_training(work_dir, base_model_id=None, hf_token=None, train_config_path=
             target_lat = _vae_encode(vae, target)
             source_lat = _vae_encode(vae, source * (1 - mask))
             mask_lat = F.interpolate(mask, size=target_lat.shape[-2:])
-            prompt_embeds, pooled = (e.to(device) for e in embeds[i])
+            _emb = torch.load(emb_dir / f"{prompt_to_id[it['prompt']]}.pt", weights_only=True)
+            prompt_embeds, pooled = _emb["pe"].to(device), _emb["pooled"].to(device)
 
         noise = torch.randn_like(target_lat)
         u = compute_density_for_timestep_sampling(
@@ -199,6 +208,9 @@ def run_training(work_dir, base_model_id=None, hf_token=None, train_config_path=
             _save_artifacts(run_dir, transformer, input_adapter, tag=f"checkpoints/checkpoint-{step+1}")
             print(f"  [ckpt] checkpoint-{step+1}")
     mf.close()
+    # drop the on-disk embed cache (not part of the artifact)
+    import shutil as _sh
+    _sh.rmtree(emb_dir, ignore_errors=True)
 
     out = _save_artifacts(run_dir, transformer, input_adapter, tag="adapter")
     adapter_file = out / "pytorch_lora_weights.safetensors"
