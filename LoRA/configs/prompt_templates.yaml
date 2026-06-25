@@ -22,8 +22,11 @@ validation_prompts:
 
 # Inpaint prompts. {trigger} is substituted with the trigger token for the LoRA
 # condition and with an empty string for the baseline condition.
+# {pose}/{view}/{scene} fit the CityPersons-style eval; {instruction} carries a
+# PIPE instruction when the PIPE eval set is used. Unused fields are dropped.
 inpaint_prompt_template: >
   a realistic {trigger} pedestrian,
+  {instruction},
   {pose},
   {view},
   {scene},

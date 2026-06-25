@@ -85,9 +85,25 @@ prompts + `lora_val`; the frozen eval is run once after config is locked.
 
 ## C. Inpaint test (`notebooks/03_test_sd35_inpaint_lora.ipynb`)
 
-Loads frozen cases, runs B0 then B1 with **identical** image/mask/prompt-fields/
-seed/resolution/strength/guidance/steps/negative-prompt — only the trigger token
-differs. Per-case metrics (component metrics only, no fused score):
+**Golden eval set — PIPE.** The eval cases come from
+[`paint-by-inpaint/PIPE`](https://huggingface.co/datasets/paint-by-inpaint/PIPE),
+which provides **real** before/after pairs: `source_img` is the object-erased
+background (inpaint input) and `target_img` is the real photo (ground truth).
+PIPE ships no mask, so `build_eval_cases_pipe.py` derives the object mask from the
+thresholded, dilated `|target − source|` difference. The builder filters to
+person instructions and writes `eval/pipe_eval_v1/{cases.jsonl,images,masks,
+reference}` (`images`=source, `reference`=target). Because the reference is a
+real photo (not another model's output), `outside_mask_*` metrics are meaningful.
+Settings live under `configs/inpaint_eval.yaml: pipe_eval`.
+
+> The earlier `build_eval_cases.py` (CityPersons valid → mask over the existing
+> person) is a reconstruction proxy and is kept for that flow; PIPE is the real
+> golden set for "add a person to a background".
+
+Runs B0 then B1 with **identical** image/mask/prompt-fields/seed/resolution/
+strength/guidance/steps/negative-prompt — only the trigger token differs (B1 also
+attaches the LoRA adapter). Per-case metrics (component metrics only, no fused
+score):
 
 `outside_mask_mae`, `outside_mask_ssim`, `person_detected`, `person_confidence`,
 `person_inside_mask_ratio`, `expected/detected_height`, `scale_ratio`,

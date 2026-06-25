@@ -12,7 +12,17 @@ guidance_scale: 7.5
 num_inference_steps: 30
 seed_list: [42, 43, 44]
 
-evaluation_release: /kaggle/working/vin_lora/eval/inpaint_eval_v1
+# Real golden eval set built from PIPE (target_img is a real photo -> a true
+# ground truth, not another model's output). See build_eval_cases_pipe.py.
+evaluation_release: /kaggle/working/vin_lora/eval/pipe_eval_v1
+
+# PIPE eval-set builder settings
+pipe_eval:
+  split: test            # PIPE test == 752 rows
+  person_only: true
+  limit: null            # null = all matching person cases
+  mask_diff_threshold: 25
+  mask_dilate_px: 6
 
 # Reproducibility guards — fail fast if the model/adapter do not match training.
 require_base_model_match: true
