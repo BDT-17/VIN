@@ -15,9 +15,8 @@ foundation but serve different goals.
 | Path | Flow | Purpose | Status |
 |------|------|---------|--------|
 | `sd35_*.py`, `sd35_run.ipynb`, `sd3.5-…clean.ipynb` | **V5 augmentation** | Insert objects into existing images while preserving the background | Smoke-runnable research baseline |
-| `LoRA/` | **LoRA training + inpaint test** | Two sub-flows: (A) data ETL → release → train adapter; (B) SD3.5 inpaint baseline vs LoRA | Active focus; clean package (no V5 copy) |
-| `inpaint/` | **AI Replace** | Pokecut-style inpaint with hard background restoration | Background-preservation smoke flow |
-| `addit(experimental)/` | **ADDIT** | Concept-injection experiments | Experimental, not validated |
+| `LoRA/` | **LoRA inpaint-edit** | Add an object into a scene (preserve 100% bg, match the vibe). Data ETL → train edit-LoRA on PIPE pairs → infer + eval | **Active focus** |
+| `addit(experimental)/` | **ADDIT** | Training-free object insertion (attention injection + structure transfer), self-contained | Experimental, kept for reference |
 | `docs/` | — | Design notes, model selection, workflow diagrams | — |
 | `tests/` | — | Root augmentation tests (`LoRA/tests/` holds the LoRA tests) | — |
 
@@ -70,84 +69,57 @@ reports `scale_coverage_rate`.
 
 ---
 
-## 2. LoRA flow (`LoRA/`)
+## 2. LoRA inpaint-edit flow (`LoRA/`) — active focus
 
-A clean package with **no copy of the V5 augmentation flow** (no scale
-correction, semantic placement, object-only composite, harmonization, or
-autotune). Two independent sub-flows:
+A clean package (no copy of the V5 augmentation flow). Goal: **add an object
+(person) into many kinds of scenes, preserve 100% of the background, and match
+the photo's vibe.** Background preservation is achieved by hard-restore at
+inference, not learned; the LoRA learns the *edit / vibe-match* behavior from
+before/after pairs.
 
 ```text
-A. Data ETL + Train      raw datasets -> LoRA release -> train adapter -> artifacts
-B. SD3.5 Inpaint Test    frozen cases -> SD3.5 inpaint (B0) vs +LoRA (B1) -> paired metrics
+Data: paint-by-inpaint/PIPE pairs  (source = object erased, target = real photo)
+Train:  SD3.5 + LoRA(attn) + a trainable InputAdapter Conv(33->16) on
+        [noisy | source_lat | mask_lat]  -> learns to fill the mask in-context
+Infer:  full denoise loop (edit-conditioned each step) + hard-restore outside mask
 ```
+
+SD3.5 has no official inpaint/edit trainer, so it is hand-rolled. A single-pair
+overfit spike confirmed the conditioning (collapse_ratio 0.18); smoke train and
+the full end-to-end run are verified (background preserved, edit only in the mask).
+
+**Two required artifacts** (both needed at inference):
+`adapter/pytorch_lora_weights.safetensors` + `adapter/input_adapter.pt`.
 
 **Layout**
 
-- `LoRA/configs/` — `sources.yaml`, `prompt_templates.yaml`, `lora_train.yaml`,
-  `inpaint_eval.yaml`
-- `LoRA/data/` — ETL: `ingest → normalize → dedupe → build_eval_cases → curate →
-  captions → splits → export → validate` (+ `parsers/`)
-- `LoRA/train/` — `train_sd35_lora`, `export_artifacts`, `provenance`
-- `LoRA/inference/` — `sd35_inpaint_runner`, `inpaint_metrics`, `report`
-- `LoRA/notebooks/` — `01_build_lora_release`, `02_train_sd35_lora`,
-  `03_test_sd35_inpaint_lora` (thin orchestration only)
+- `LoRA/configs/` — `inpaint_edit_train.yaml`, `prompt_templates.yaml`,
+  `sources.yaml`, `inpaint_eval.yaml`
+- `LoRA/train/` — `train_inpaint_edit` (full trainer), `inpaint_edit_dataset`
+  (PIPE stream + diff-mask), `spike_inpaint_edit` (feasibility), `provenance`
+- `LoRA/inference/` — `sd35_edit_runner` (denoise loop + hard-restore),
+  `inpaint_metrics`, `report`
+- `LoRA/data/` — PIPE eval builder + the older ETL/release helpers
+- `LoRA/notebooks/` — **`sd35_edit_all_in_one.ipynb`** (train → test → contact
+  sheet in one batch-safe session); `00_spike`, `05_train`, `06_test`
 - `LoRA/vendor/diffusers/<commit>/` — pinned training script
 
-**Run on Kaggle** (add the repo root to `sys.path`, then `from LoRA.data… import`):
-
-1. `01_build_lora_release.ipynb` — resolves dataset mounts, runs the ETL, and
-   hard-fails unless the release validates. Produces a `pedestrian_lora_v1`
-   release + frozen `inpaint_eval_v1` / `final_inpaint_test_v1` eval sets.
-2. `02_train_sd35_lora.ipynb` — vendors the pinned trainer, verifies the release
-   is `validated`, dry-run → smoke (100) → 1000 steps, exports adapter +
-   provenance. Caption mode always passes `--instance_prompt`.
-3. `03_test_sd35_inpaint_lora.ipynb` — raw SD3.5 inpaint, B0 vs B1 with identical
-   inputs except the trigger token; writes paired component metrics.
-
-**Dataset & eval policy** (`configs/sources.yaml`): CityPersons `train`, MOT17-02,
-and Human Detection `1` feed the LoRA release (group-aware train/val split);
-CityPersons `valid` is frozen for the inpaint eval and never trains LoRA. Trigger
-token `<vin_ped>` in 100% of captions, validation prompts, and provenance.
-
-**Validation hard-fails** on: empty trigger token, any caption missing the
-trigger, empty train/val, unreadable crop, duplicate-cluster/group overlap
-between train↔val, or any eval image/group leaking into the release.
-
-**Metrics** (inpaint test, component-only — no fused score): `outside_mask_mae`,
-`outside_mask_ssim`, `person_detected/confidence`, `person_inside_mask_ratio`,
-`scale_ratio`, `edge_seam_score`, `runtime_seconds`, `cuda_peak_mb`. The report
-emits per-metric `delta_* = LoRA − baseline`.
+**Run on Kaggle:** open `sd35_edit_all_in_one.ipynb`, set GPU + SD3.5 access
+(HF_TOKEN secret or a mounted model dataset), pick `SMOKE` true/false, then
+**Save Version → Save & Run All**. Eval reference = the real PIPE `target_img`,
+so background metrics are meaningful; component metrics only, no fused score.
+Training data is general PIPE person pairs (diverse scenes), not street-only.
 
 See `LoRA/README_LORA.md` for the full per-stage contract.
 
 ---
 
-## 3. AI Replace flow (`inpaint/`)
+## 3. ADDIT (experimental, `addit(experimental)/`)
 
-Standalone Pokecut-style inpainting. Builds an insertion mask from a bbox, runs
-SD inpainting, then **hard-restores the original pixels outside the mask** so the
-background is provably preserved; validates with detector/ghost checks and emits
-manifest metrics.
-
-- `inpaint/sd35_ai_replace.py` — main flow
-- `inpaint/sd35_mask_refinement.py`, `sd35_harmonization.py`,
-  `sd35_ghost_detection.py` — mask/blend/validation
-- `inpaint/smoke_runner.py`, `inpaint/smoke_test_ai_replace.ipynb` — smoke run
-- `inpaint/test_background_preservation.py` — outside-mask restoration test
-
-Current smoke uses a fixed heuristic bbox (≈42% image height, centered ≈52% x,
-bottom ≈90% y) for every image — so a passing smoke run proves background
-preservation, **not** placement quality. See `inpaint/README_ai_replace.md`.
-
----
-
-## 4. ADDIT (experimental, `addit(experimental)/`)
-
-Concept-injection experiments (`addit_core.py`, `addit_pipeline.py`,
-`addit_config.py`, `addit_run.ipynb`). `ADDIT_CONCEPT_ENABLED=True` but the
-advanced components (weighted extended attention, structure transfer,
-subject-guided blend proxy) are still disabled. Treat as an experimental branch,
-not a baseline.
+Training-free object insertion (no LoRA): a custom joint-attention processor
+(cache/inject), noise structure transfer, and subject-guided latent blending,
+over an SD3.5 (or optional FLUX) backend. Self-contained — nothing else imports
+it. Kept as a reference implementation; not part of the active flow.
 
 ---
 
@@ -189,6 +161,7 @@ VRAM stable.
 ## Status
 
 A research toolkit, not a production service. The V5 augmentation flow is a
-smoke-runnable baseline; the LoRA flow (data release + training) is the current
-focus; AI Replace is a background-preservation smoke flow; ADDIT is experimental.
-Datasets are **not** stored in this repo.
+smoke-runnable baseline; the **LoRA inpaint-edit flow is the current focus**
+(conditioning + end-to-end run verified; full-train for quality in progress);
+ADDIT is a self-contained experimental reference. Datasets and trained model
+artifacts are **not** stored in this repo.
