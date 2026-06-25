@@ -1,5 +1,17 @@
 # LoRA flow
 
+> **Active direction — inpaint-EDIT LoRA.** The goal is a model that adds an
+> object while preserving 100% of the background and matching the photo's vibe.
+> Base SD3.5 already makes good pedestrians, so a plain concept LoRA adds little;
+> the value is in *edit* behavior learned from before/after pairs (PIPE). SD3.5
+> has no official inpaint/edit trainer, so we hand-rolled one. A single-pair
+> overfit spike (notebook `00`, collapse_ratio 0.18) confirmed the edit
+> conditioning is wired correctly. Training: notebook `05` /
+> `train/train_inpaint_edit.py`. Inference + eval (D2) is being built next.
+>
+> The concept-LoRA + reconstruction-eval pieces below remain for comparison /
+> the detector-utility track, but the edit flow is the headline.
+
 Two independent sub-flows, no V5 copy:
 
 ```text
