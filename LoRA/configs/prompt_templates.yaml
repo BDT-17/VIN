@@ -1,0 +1,36 @@
+trigger_token: "<vin_ped>"
+class_token: pedestrian
+template_version: v1
+
+# Per-image caption. Empty fields are dropped before joining.
+caption_template: >
+  a photo of <vin_ped> pedestrian,
+  {framing},
+  {view},
+  {pose},
+  {occlusion},
+  {scene},
+  {lighting}
+
+training_instance_prompt: "a photo of <vin_ped> pedestrian"
+
+validation_prompts:
+  - "a photo of <vin_ped> pedestrian, full body, walking on an urban sidewalk"
+  - "a photo of <vin_ped> pedestrian, side view, crossing a road"
+  - "a photo of <vin_ped> pedestrian, partially occluded, realistic street scene"
+  - "a photo of <vin_ped> pedestrian, distant view, CCTV camera perspective"
+
+# Inpaint prompts. {trigger} is substituted with the trigger token for the LoRA
+# condition and with an empty string for the baseline condition.
+inpaint_prompt_template: >
+  a realistic {trigger} pedestrian,
+  {pose},
+  {view},
+  {scene},
+  perspective matched to the image,
+  natural lighting
+
+negative_prompt: >
+  extra limbs, duplicate person, cropped body,
+  distorted anatomy, floating person,
+  text, watermark, blurry, low quality

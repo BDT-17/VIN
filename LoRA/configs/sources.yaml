@@ -1,21 +1,22 @@
 release_name: pedestrian_lora_v1
 
+# Source datasets. Roles:
+#   lora_candidate     -> eligible for the LoRA train/val release
+#   inpaint_eval        -> frozen SD3.5 inpaint evaluation (never trains LoRA)
 sources:
   - source_id: citypersons
     kaggle_mount: /kaggle/input/citypersons-canonical
     parser: yolo
     source_type: pedestrian_detection
-    allowed_roles:
-      - lora_positive
-      - background
-      - downstream_benchmark
     group_strategy: original_scene
     duplicate_priority: 1
-    benchmark_lock: true
-    license_review_required: true
+    # CityPersons train -> LoRA candidate; valid/test -> frozen inpaint eval.
+    lora_splits: [train]
+    eval_splits: [val]          # 'test' folder absent in the mounted dataset
     notes: >
-      Canonical CityPersons source. Benchmark-locked samples must never
-      enter LoRA training, prompt tuning, or synthetic generation.
+      Canonical CityPersons. The train folder supplies LoRA candidates; the
+      valid (and test, if present) folders are frozen for SD3.5 inpaint
+      evaluation and must never enter LoRA training.
     splits:
       train: train/images
       val: valid/images
@@ -29,17 +30,15 @@ sources:
     kaggle_mount: /kaggle/input/mot17-02-fcrnn
     parser: mot
     source_type: video_tracking
-    allowed_roles:
-      - lora_positive
-      - background
     group_strategy: sequence_time_window
     temporal_sampling_fps: 2.0
     temporal_window_seconds: 2.0
     duplicate_priority: 2
-    license_review_required: true
+    lora_splits: [train]
+    eval_splits: []
     notes: >
-      MOT17-02 sequence frames. Use temporal sampling to avoid
-      consecutive frame redundancy. Group by time window for split safety.
+      MOT17-02 sequence frames. Temporal sampling avoids consecutive-frame
+      redundancy; grouped by time window for split safety. LoRA candidate only.
     sequence_dir: MOT17-02-FRCNN/img1
     gt_dir: MOT17-02-FRCNN/gt
 
@@ -49,16 +48,13 @@ sources:
     source_type: binary_classification
     positive_dir: "1"
     negative_dir: "0"
-    allowed_roles:
-      - lora_positive
-      - background
     group_strategy: perceptual_cluster
     duplicate_priority: 3
-    license_review_required: true
+    lora_splits: [train]
+    eval_splits: []
     notes: >
-      Human Detection Dataset. Positive images require person detection
-      and pseudo-labeling before becoming LoRA training samples.
-      Negative images are background pool only.
+      Human Detection Dataset. Positive ("1") images require person detection /
+      pseudo-labeling before becoming LoRA candidates. Negatives are ignored.
 
 quality_thresholds:
   min_bbox_height_px: 96
@@ -67,15 +63,21 @@ quality_thresholds:
   max_source_share: 0.50
 
 split_config:
-  train_ratio: 0.70
+  # group-aware split of LoRA candidates into lora train/val
+  train_ratio: 0.85
   val_ratio: 0.15
-  test_ratio: 0.15
   split_seed: 42
-  enforce_group_lock: true
+
+eval_config:
+  # how the frozen inpaint eval pool is partitioned (group-disjoint)
+  eval_v1_ratio: 0.70          # dev/tuning set (inpaint_eval_v1)
+  final_holdout_ratio: 0.30    # touch-once set (final_inpaint_test_v1)
+  eval_seed: 42
 
 caption_config:
   trigger_token: "<vin_ped>"
-  template_version: "v1"
+  class_token: pedestrian
+  template_version: v1
   min_caption_tokens: 5
   max_caption_tokens: 77
 
@@ -84,3 +86,5 @@ export_config:
   crop_context_ratio: 0.25
   crop_min_size: 128
   crop_max_size: 768
+
+base_model_id: stabilityai/stable-diffusion-3.5-medium

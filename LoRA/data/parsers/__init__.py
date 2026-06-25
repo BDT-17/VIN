@@ -1,15 +1,7 @@
-"""Dataset parsers for VIN LoRA pipeline.
+"""Source dataset parsers (YOLO, MOT, classification folders)."""
 
-Each parser converts a specific dataset format into the canonical
-ImageRecord and InstanceRecord schema.
-"""
-
-from .mot import MOTParser
 from .yolo import YOLOParser
+from .mot import MOTParser
 from .classification import ClassificationParser
 
-__all__ = [
-    "MOTParser",
-    "YOLOParser",
-    "ClassificationParser",
-]
+__all__ = ["YOLOParser", "MOTParser", "ClassificationParser"]

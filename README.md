@@ -15,7 +15,7 @@ foundation but serve different goals.
 | Path | Flow | Purpose | Status |
 |------|------|---------|--------|
 | `sd35_*.py`, `sd35_run.ipynb`, `sd3.5-…clean.ipynb` | **V5 augmentation** | Insert objects into existing images while preserving the background | Smoke-runnable research baseline |
-| `LoRA/` | **LoRA training** | Build a validated dataset release, then train + export an SD3.5 LoRA adapter | Active focus; data pipeline + training ready |
+| `LoRA/` | **LoRA training + inpaint test** | Two sub-flows: (A) data ETL → release → train adapter; (B) SD3.5 inpaint baseline vs LoRA | Active focus; clean package (no V5 copy) |
 | `inpaint/` | **AI Replace** | Pokecut-style inpaint with hard background restoration | Background-preservation smoke flow |
 | `addit(experimental)/` | **ADDIT** | Concept-injection experiments | Experimental, not validated |
 | `docs/` | — | Design notes, model selection, workflow diagrams | — |
@@ -70,54 +70,55 @@ reports `scale_coverage_rate`.
 
 ---
 
-## 2. LoRA training flow (`LoRA/`)
+## 2. LoRA flow (`LoRA/`)
 
-End-to-end: **raw datasets → build dataset release → validate → train LoRA →
-export adapter**. All logic lives in Python modules; the notebook only calls them.
+A clean package with **no copy of the V5 augmentation flow** (no scale
+correction, semantic placement, object-only composite, harmonization, or
+autotune). Two independent sub-flows:
 
-**Entry points**
+```text
+A. Data ETL + Train      raw datasets -> LoRA release -> train adapter -> artifacts
+B. SD3.5 Inpaint Test    frozen cases -> SD3.5 inpaint (B0) vs +LoRA (B1) -> paired metrics
+```
 
-- `LoRA/sd35_run.ipynb` — the Kaggle LoRA runner (recommended). Clones the repo,
-  resolves dataset mounts, builds + validates a release, then runs smoke/full
-  training and verifies the adapter.
-- `LoRA/data/` — the data contract: `sources.yaml`, parsers (YOLO/MOT/
-  classification), dedupe, splits, captions, crops, export, validate, metrics.
-- `LoRA/sd35_lora_training.py` — training/export entrypoint (builds the Diffusers
-  `accelerate launch` command, monitors loss with NaN/Inf hard-fail, exports the
-  `.safetensors` + `.pt` adapter and provenance).
+**Layout**
 
-**Run on Kaggle** (`LoRA/sd35_run.ipynb`):
+- `LoRA/configs/` — `sources.yaml`, `prompt_templates.yaml`, `lora_train.yaml`,
+  `inpaint_eval.yaml`
+- `LoRA/data/` — ETL: `ingest → normalize → dedupe → build_eval_cases → curate →
+  captions → splits → export → validate` (+ `parsers/`)
+- `LoRA/train/` — `train_sd35_lora`, `export_artifacts`, `provenance`
+- `LoRA/inference/` — `sd35_inpaint_runner`, `inpaint_metrics`, `report`
+- `LoRA/notebooks/` — `01_build_lora_release`, `02_train_sd35_lora`,
+  `03_test_sd35_inpaint_lora` (thin orchestration only)
+- `LoRA/vendor/diffusers/<commit>/` — pinned training script
 
-1. **Datasets** — attach via *Add Data*. Cell 04 auto-probes candidate mount
-   paths for each source in `sources.yaml` (both `/kaggle/input/<slug>` and
-   `/kaggle/input/datasets/<user>/<slug>` forms), verifies the parser's expected
-   sub-structure, and writes `/kaggle/working/sources_resolved.yaml`.
-2. **SD3.5 model** — mount the model dataset, **or** add a Kaggle secret
-   `HF_TOKEN` so it downloads from Hugging Face.
-3. Run cells: install → clone → GPU preflight → resolve mounts → (HF login) →
-   build release → validate → ImageFolder contract → dry run → smoke train (50
-   steps) → verify adapter → full train (1000 steps) → metrics → zip artifacts.
+**Run on Kaggle** (add the repo root to `sys.path`, then `from LoRA.data… import`):
 
-**Dataset & split policy**
+1. `01_build_lora_release.ipynb` — resolves dataset mounts, runs the ETL, and
+   hard-fails unless the release validates. Produces a `pedestrian_lora_v1`
+   release + frozen `inpaint_eval_v1` / `final_inpaint_test_v1` eval sets.
+2. `02_train_sd35_lora.ipynb` — vendors the pinned trainer, verifies the release
+   is `validated`, dry-run → smoke (100) → 1000 steps, exports adapter +
+   provenance. Caption mode always passes `--instance_prompt`.
+3. `03_test_sd35_inpaint_lora.ipynb` — raw SD3.5 inpaint, B0 vs B1 with identical
+   inputs except the trigger token; writes paired component metrics.
 
-- Sources (`LoRA/data/sources.yaml`): CityPersons (YOLO, `benchmark_lock`),
-  MOT17-02 (MOT), Human Detection (classification). Trigger token `<vin_ped>`.
-- A `benchmark_lock` source contributes **both** frozen benchmark and LoRA data,
-  kept scene-disjoint by the group-aware splitter:
-  - source `valid` → `detector_val_real_frozen`
-  - the group-disjoint ~15% `test` slice of source `train` →
-    `detector_test_real_frozen`
-  - the remaining ~85% of source `train` → `lora_positive` (LoRA training)
-- 14 hard validation gates run in `validate.py` (split-group leakage, duplicate
-  clusters, captions/trigger token, crop bounds, source share, etc.).
+**Dataset & eval policy** (`configs/sources.yaml`): CityPersons `train`, MOT17-02,
+and Human Detection `1` feed the LoRA release (group-aware train/val split);
+CityPersons `valid` is frozen for the inpaint eval and never trains LoRA. Trigger
+token `<vin_ped>` in 100% of captions, validation prompts, and provenance.
 
-**Artifacts** (per training run): `pytorch_lora_weights.safetensors` + `.pt`,
-`training_config.json`, `training_provenance.json`, `dataset_provenance.json`,
-`gpu_info.json`, `pip_freeze.txt`, `validation_prompts.json`,
-`adapter_verification.json`, and `reports/training/<run_id>/` (metrics.jsonl,
-summary.json, loss_curve.png).
+**Validation hard-fails** on: empty trigger token, any caption missing the
+trigger, empty train/val, unreadable crop, duplicate-cluster/group overlap
+between train↔val, or any eval image/group leaking into the release.
 
-See `LoRA/README_LORA.md` for inference/adapter-loading config details.
+**Metrics** (inpaint test, component-only — no fused score): `outside_mask_mae`,
+`outside_mask_ssim`, `person_detected/confidence`, `person_inside_mask_ratio`,
+`scale_ratio`, `edge_seam_score`, `runtime_seconds`, `cuda_peak_mb`. The report
+emits per-metric `delta_* = LoRA − baseline`.
+
+See `LoRA/README_LORA.md` for the full per-stage contract.
 
 ---
 
@@ -150,19 +151,13 @@ not a baseline.
 
 ---
 
-## Import gotchas
+## Imports
 
-All `LoRA/*.py` modules use bare absolute imports (`from sd35_config import *`).
-Because the repo root **and** `LoRA/` both contain `sd35_config.py` (and the root
-copy lacks the `LORA_TRAINING_*` names), the LoRA flow requires `…/VIN/LoRA` to
-be **ahead of** `…/VIN` on `sys.path` so bare imports resolve to
-`LoRA/sd35_config.py`. `LoRA/sd35_run.ipynb` Cell 02 sets this up.
-
-To patch training config at runtime, patch the **bare** module
-(`import sd35_config as _cfg`) — the same object the trainer reads — not
-`import LoRA.sd35_config` (a separate module loaded from the same file). After
-patching, `importlib.reload(LoRA.sd35_lora_training)` re-runs its
-`from sd35_config import *` and picks up the change.
+- **`LoRA/`** is a clean Python package: add the repo root to `sys.path` and use
+  `from LoRA.data.pipeline import run_full_etl` etc. No bare `sd35_*` imports, no
+  dual-config ambiguity. Behavior is driven by YAML under `LoRA/configs/`.
+- **Root augmentation flow** still uses bare `from sd35_config import *`, so its
+  notebooks import the root `sd35_*.py` modules directly (the LoRA copies are gone).
 
 ---
 

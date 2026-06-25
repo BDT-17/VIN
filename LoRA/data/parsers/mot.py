@@ -1,196 +1,100 @@
-"""MOT (Multiple Object Tracking) format parser.
+"""MOT-format parser: <mount>/<sequence_dir> frames + <mount>/<gt_dir>/gt.txt.
 
-Parses MOT17-style tracking datasets with gt.txt annotations.
+gt.txt columns: frame,id,x,y,w,h,conf,class,visibility
+Temporal sampling avoids consecutive-frame redundancy; frames are grouped by a
+time window so a whole window stays on one side of any split.
 """
 
-import hashlib
-import imagehash
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict
-from PIL import Image
-import pandas as pd
+from typing import List, Tuple
 
-from ..schema import ImageRecord, InstanceRecord
+from ..schema import ImageRecord, InstanceRecord, PEDESTRIAN
+
+_IMG_EXT = (".jpg", ".jpeg", ".png")
+_MOT_PEDESTRIAN_CLASS = 1
 
 
 class MOTParser:
-    """Parser for MOT17-style video tracking datasets.
-
-    Expected structure:
-        MOT17-02-FRCNN/
-            img1/
-                000001.jpg
-                000002.jpg
-                ...
-            gt/
-                gt.txt
-
-    gt.txt format (CSV, no header):
-        frame_id, track_id, x, y, w, h, conf, class, visibility
-    """
-
-    def __init__(
-        self,
-        source_id: str,
-        mount_path: Path,
-        sequence_dir: str,
-        gt_dir: str,
-        temporal_sampling_fps: Optional[float] = None,
-        temporal_window_seconds: Optional[float] = None,
-    ):
+    def __init__(self, source_id: str, mount_path, sequence_dir: str, gt_dir: str,
+                 temporal_sampling_fps=2.0, temporal_window_seconds=2.0,
+                 source_fps=30.0, lora_splits=None, eval_splits=None):
         self.source_id = source_id
         self.mount_path = Path(mount_path)
-        self.sequence_dir = sequence_dir
-        self.gt_dir = gt_dir
-        self.temporal_sampling_fps = temporal_sampling_fps or 2.0
-        self.temporal_window_seconds = temporal_window_seconds or 2.0
-
         self.img_dir = self.mount_path / sequence_dir
-        self.gt_path = self.mount_path / gt_dir / "gt.txt"
-
-        if not self.img_dir.exists():
-            raise FileNotFoundError(f"MOT image directory not found: {self.img_dir}")
+        self.gt_path = self.mount_path / gt_dir / "gt.txt" if gt_dir else None
+        self.fps = float(temporal_sampling_fps or 2.0)
+        self.window_s = float(temporal_window_seconds or 2.0)
+        self.source_fps = float(source_fps)
+        # MOT sequence frames are treated as 'train' candidates by default
+        self.split_name = (lora_splits or ["train"])[0] if (lora_splits or eval_splits) else "train"
 
     def parse(self) -> Tuple[List[ImageRecord], List[InstanceRecord]]:
-        """Parse MOT dataset into canonical records."""
-        images = []
-        instances = []
+        if not self.img_dir.exists():
+            return [], []
 
-        # Load ground truth if available
-        gt_df = None
-        if self.gt_path.exists():
-            gt_df = self._load_gt()
+        gt = self._load_gt()
+        frames = sorted(p for p in self.img_dir.iterdir() if p.suffix.lower() in _IMG_EXT)
+        sampled = self._temporal_sample(frames)
+        window_frames = max(1, int(self.window_s * self.fps))
 
-        # Discover frames
-        image_files = sorted(self.img_dir.glob("*.jpg")) + sorted(self.img_dir.glob("*.png"))
-
-        # Apply temporal sampling
-        sampled_files = self._temporal_sample(image_files)
-
-        for frame_idx, img_path in enumerate(sampled_files, start=1):
-            # Create image record
+        images: List[ImageRecord] = []
+        instances: List[InstanceRecord] = []
+        for order, img_path in enumerate(sampled):
+            frame_idx = _frame_index(img_path)
+            w, h = _image_size(img_path)
             image_id = f"{self.source_id}_{img_path.stem}"
-
-            with Image.open(img_path) as pil_img:
-                width, height = pil_img.size
-
-                # Compute hashes
-                sha256 = self._compute_sha256(img_path)
-                phash = str(imagehash.phash(pil_img))
-
-            # Group ID based on temporal window
-            group_id = self._compute_group_id(frame_idx)
-
-            image_rec = ImageRecord(
+            window_id = order // window_frames
+            images.append(ImageRecord(
                 image_id=image_id,
                 source_id=self.source_id,
-                source_image_id=img_path.stem,
                 raw_path=str(img_path),
-                width=width,
-                height=height,
-                sha256=sha256,
-                phash=phash,
-                group_id=group_id,
-                original_split="train",
-                frame_index=int(img_path.stem),
-                camera_domain="mot_surveillance",
-                file_size_bytes=img_path.stat().st_size,
-            )
-            images.append(image_rec)
-
-            # Parse instances for this frame
-            if gt_df is not None:
-                frame_num = int(img_path.stem)
-                frame_instances = self._parse_frame_instances(
-                    gt_df, frame_num, image_id, width, height
-                )
-                instances.extend(frame_instances)
-
+                source_image_id=img_path.stem,
+                original_split=self.split_name,
+                width=w, height=h,
+                group_id=f"{self.source_id}_window_{window_id}",
+            ))
+            for i, (x, y, bw, bh, vis) in enumerate(gt.get(frame_idx, [])):
+                instances.append(InstanceRecord(
+                    instance_id=f"{image_id}_{i}",
+                    image_id=image_id,
+                    class_name=PEDESTRIAN,
+                    bbox_x=x, bbox_y=y, bbox_w=bw, bbox_h=bh,
+                    visible_bbox_x=x, visible_bbox_y=y, visible_bbox_w=bw, visible_bbox_h=bh,
+                    occlusion_level=(1.0 - vis) if vis is not None else None,
+                    ignore_flag=False,
+                ))
         return images, instances
 
-    def _load_gt(self) -> pd.DataFrame:
-        """Load MOT ground truth file."""
-        # MOT format: frame, track_id, x, y, w, h, conf, class, visibility
-        df = pd.read_csv(
-            self.gt_path,
-            header=None,
-            names=["frame", "track_id", "x", "y", "w", "h", "conf", "class", "visibility"],
-        )
-        return df
+    def _temporal_sample(self, frames):
+        interval = max(1, int(self.source_fps / self.fps))
+        return frames[::interval]
 
-    def _temporal_sample(self, image_files: List[Path]) -> List[Path]:
-        """Sample frames temporally to reduce redundancy."""
-        if not image_files:
-            return []
-
-        # Assume 30 FPS for MOT17
-        source_fps = 30.0
-        sample_interval = max(1, int(source_fps / self.temporal_sampling_fps))
-
-        return image_files[::sample_interval]
-
-    def _compute_group_id(self, frame_idx: int) -> str:
-        """Compute group ID based on temporal window."""
-        # Group frames within temporal window together
-        window_frames = int(self.temporal_window_seconds * self.temporal_sampling_fps)
-        group_num = (frame_idx - 1) // window_frames
-        return f"{self.source_id}_window_{group_num:04d}"
-
-    def _parse_frame_instances(
-        self,
-        gt_df: pd.DataFrame,
-        frame_num: int,
-        image_id: str,
-        width: int,
-        height: int,
-    ) -> List[InstanceRecord]:
-        """Parse instances for a single frame."""
-        instances = []
-        frame_df = gt_df[gt_df["frame"] == frame_num]
-
-        for idx, row in frame_df.iterrows():
-            # MOT class labels: 1=pedestrian, 2=person_on_vehicle, etc.
-            # Only keep pedestrians (class 1)
-            if row["class"] != 1:
+    def _load_gt(self):
+        out = {}
+        if not self.gt_path or not self.gt_path.exists():
+            return out
+        for line in self.gt_path.read_text(encoding="utf-8").splitlines():
+            c = line.split(",")
+            if len(c) < 6:
                 continue
+            frame = int(float(c[0]))
+            if len(c) >= 8 and int(float(c[7])) != _MOT_PEDESTRIAN_CLASS:
+                continue
+            x, y, bw, bh = float(c[2]), float(c[3]), float(c[4]), float(c[5])
+            vis = float(c[8]) if len(c) >= 9 else None
+            out.setdefault(frame, []).append((x, y, bw, bh, vis))
+        return out
 
-            instance_id = f"{image_id}_inst_{row['track_id']:04d}"
 
-            # MOT coordinates are 1-indexed, convert to 0-indexed
-            x = max(0, row["x"] - 1)
-            y = max(0, row["y"] - 1)
-            w = row["w"]
-            h = row["h"]
+def _frame_index(path: Path) -> int:
+    digits = "".join(ch for ch in path.stem if ch.isdigit())
+    return int(digits) if digits else 0
 
-            # Visibility is fraction visible [0, 1]
-            visibility = row["visibility"]
 
-            instance = InstanceRecord(
-                instance_id=instance_id,
-                image_id=image_id,
-                class_name="pedestrian",
-                bbox_x=x,
-                bbox_y=y,
-                bbox_w=w,
-                bbox_h=h,
-                visible_bbox_x=x,
-                visible_bbox_y=y,
-                visible_bbox_w=w,
-                visible_bbox_h=h,
-                track_id=int(row["track_id"]),
-                occlusion_level=1.0 - visibility,
-                ignore_flag=False,
-                confidence=row["conf"],
-                annotation_origin="mot_gt",
-            )
-            instances.append(instance)
-
-        return instances
-
-    def _compute_sha256(self, file_path: Path) -> str:
-        """Compute SHA-256 hash of file."""
-        sha256 = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                sha256.update(chunk)
-        return sha256.hexdigest()
+def _image_size(path: Path):
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            return int(im.width), int(im.height)
+    except Exception:
+        return 0, 0

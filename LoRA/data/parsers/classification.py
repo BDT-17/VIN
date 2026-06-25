@@ -1,126 +1,65 @@
-"""Classification folder parser.
+"""Classification-folders parser: <mount>/<positive_dir> holds person images.
 
-Parses binary classification datasets organized into positive/negative folders.
-Requires person detection for positive samples to become LoRA training candidates.
+Only positive ("1") images become LoRA candidates, and they must be
+detected/pseudo-labeled downstream (curate) before a usable crop exists.
+Each positive image gets one whole-image instance as a detection placeholder.
 """
 
-import hashlib
-import imagehash
 from pathlib import Path
-from typing import List, Tuple, Optional
-from PIL import Image
+from typing import List, Tuple
 
-from ..schema import ImageRecord, InstanceRecord
+from ..schema import ImageRecord, InstanceRecord, PEDESTRIAN
+
+_IMG_EXT = (".jpg", ".jpeg", ".png")
 
 
 class ClassificationParser:
-    """Parser for binary classification folder structure.
-
-    Expected structure:
-        dataset_root/
-            0/  # negative (background only)
-                img001.jpg
-                ...
-            1/  # positive (contains person)
-                img002.jpg
-                ...
-
-    Note: Positive images are image-level labels only.
-    Person detection and pseudo-labeling is required before
-    these can become LoRA training samples.
-    """
-
-    def __init__(
-        self,
-        source_id: str,
-        mount_path: Path,
-        positive_dir: str = "1",
-        negative_dir: str = "0",
-    ):
+    def __init__(self, source_id: str, mount_path, positive_dir="1", negative_dir="0",
+                 lora_splits=None, eval_splits=None):
         self.source_id = source_id
         self.mount_path = Path(mount_path)
         self.positive_dir = positive_dir
-        self.negative_dir = negative_dir
+        self.split_name = (lora_splits or ["train"])[0] if (lora_splits or eval_splits) else "train"
 
     def parse(self) -> Tuple[List[ImageRecord], List[InstanceRecord]]:
-        """Parse classification dataset into canonical records.
-
-        Returns:
-            - ImageRecord for all images
-            - InstanceRecord will be EMPTY (pseudo-labeling required later)
-        """
-        images = []
-        instances = []  # Will remain empty; pseudo-labeling needed
-
-        # Parse positive folder
         pos_dir = self.mount_path / self.positive_dir
-        if pos_dir.exists():
-            pos_images = self._parse_folder(pos_dir, "positive")
-            images.extend(pos_images)
+        if not pos_dir.exists():
+            return [], []
 
-        # Parse negative folder
-        neg_dir = self.mount_path / self.negative_dir
-        if neg_dir.exists():
-            neg_images = self._parse_folder(neg_dir, "negative")
-            images.extend(neg_images)
-
-        return images, instances
-
-    def _parse_folder(
-        self,
-        folder: Path,
-        label: str,
-    ) -> List[ImageRecord]:
-        """Parse all images in a folder."""
-        records = []
-
-        image_files = (
-            list(folder.glob("*.jpg"))
-            + list(folder.glob("*.jpeg"))
-            + list(folder.glob("*.png"))
-        )
-
-        for img_path in sorted(image_files):
-            image_id = f"{self.source_id}_{label}_{img_path.stem}"
-
-            try:
-                with Image.open(img_path) as pil_img:
-                    width, height = pil_img.size
-
-                    # Compute hashes
-                    sha256 = self._compute_sha256(img_path)
-                    phash = str(imagehash.phash(pil_img))
-            except Exception as e:
-                print(f"Warning: Failed to process {img_path}: {e}")
+        images: List[ImageRecord] = []
+        instances: List[InstanceRecord] = []
+        for img_path in sorted(pos_dir.iterdir()):
+            if img_path.suffix.lower() not in _IMG_EXT:
                 continue
-
-            # Group ID: use perceptual cluster (will be computed later via CLIP/DINO)
-            # For now, assign placeholder
-            group_id = f"{self.source_id}_{label}_cluster_unknown"
-
-            record = ImageRecord(
+            w, h = _image_size(img_path)
+            image_id = f"{self.source_id}_pos_{img_path.stem}"
+            images.append(ImageRecord(
                 image_id=image_id,
                 source_id=self.source_id,
-                source_image_id=img_path.stem,
                 raw_path=str(img_path),
-                width=width,
-                height=height,
-                sha256=sha256,
-                phash=phash,
-                group_id=group_id,
-                original_split=label,
-                frame_index=None,
-                camera_domain="human_detection_cctv",
-                file_size_bytes=img_path.stat().st_size,
-            )
-            records.append(record)
+                source_image_id=img_path.stem,
+                original_split=self.split_name,
+                width=w, height=h,
+                group_id=f"{self.source_id}_pos_{img_path.stem}",
+            ))
+            # whole-image placeholder; curate will tighten via detection
+            instances.append(InstanceRecord(
+                instance_id=f"{image_id}_0",
+                image_id=image_id,
+                class_name=PEDESTRIAN,
+                bbox_x=0.0, bbox_y=0.0, bbox_w=float(w), bbox_h=float(h),
+                visible_bbox_x=0.0, visible_bbox_y=0.0,
+                visible_bbox_w=float(w), visible_bbox_h=float(h),
+                ignore_flag=False,
+                confidence=0.0,  # 0 == not yet detected
+            ))
+        return images, instances
 
-        return records
 
-    def _compute_sha256(self, file_path: Path) -> str:
-        """Compute SHA-256 hash of file."""
-        sha256 = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                sha256.update(chunk)
-        return sha256.hexdigest()
+def _image_size(path: Path):
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            return int(im.width), int(im.height)
+    except Exception:
+        return 0, 0

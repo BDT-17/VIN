@@ -1,65 +1,112 @@
-﻿# LoRA Experiment Flow
+# LoRA flow
 
-This folder is an isolated copy of the current SD3.5 CityPersons augmentation flow. The root pipeline is intentionally untouched.
-
-## What changed here
-
-- Outputs are written to `/kaggle/working/sd35_citypersons_lora`.
-- Metrics are written to `/kaggle/working/lora_metrics`.
-- Autotune snapshots are written to `/kaggle/working/lora_autotune_snapshots`.
-- Optional LoRA adapter loading is available in `sd35_model.py` for both img2img and inpaint pipelines.
-- Manifest rows, including rejected rows, include LoRA metadata for traceability.
-
-## Scope
-
-This folder contains the full LoRA pipeline: data ingestion, deduplication, split locking, caption generation, dataset export, training, and metrics/reporting. The `data/` subdirectory holds the data contract implementation (sources.yaml, parsers, dedupe, splits, captions, export, metrics). `sd35_lora_training.py` is the training/export entrypoint.
-
-Because this folder copies the root SD3.5 pipeline, bug fixes in the root flow can drift from the LoRA flow. When changing shared placement, scale, compositing, or validation behavior, port and test the same change in both places or extract a shared module first.
-
-## How to enable LoRA
-
-Edit `sd35_config.py` in this folder:
-
-```python
-LORA_CONFIG = {
-    "LORA_ENABLED": True,
-    "LORA_PATH": "/kaggle/input/path-to-lora-or-hf-repo",
-    "LORA_WEIGHT_NAME": "pytorch_lora_weights.safetensors",
-    "LORA_ADAPTER_NAME": "citypersons_lora",
-    "LORA_SCALE": 0.7,
-    "LORA_FUSE": False,
-    "LORA_TRIGGER_TOKEN": "<vin_ped>",
-    "LORA_PROMPT_PREFIX": "<vin_ped> pedestrian",
-}
-```
-
-Keep `LORA_ENABLED=False` to run the copied baseline behavior. Do not set `LORA_ENABLED=True` until `LORA_PATH` points to a valid local folder or Hugging Face repo. If your adapter was trained with a trigger token, set `LORA_TRIGGER_TOKEN` and/or `LORA_PROMPT_PREFIX`; the generation prompt will prepend those terms automatically.
-
-`LORA_FUSE=True` permanently fuses the adapter into the loaded pipeline. In that mode the configured `LORA_SCALE` is applied during `fuse_lora()` only. When `LORA_FUSE=False`, the scale is applied through `set_adapters()`.
-
-## Suggested first run
-
-Use the smoke preset first and inspect accept rate, reject reasons, and debug strips before changing validation thresholds. Treat LoRA as a generator adapter; keep placement, scale correction, compositing, and YOLO validation unchanged until the smoke run shows a clear pattern.
-
-## Training and `.pt` model artifact
-
-`sd35_lora_training.py` adds an explicit training/export entrypoint while keeping the augmentation runner focused on inference and evaluation.
-
-Default training settings are conservative for an NVIDIA T4 16 GB: SD3.5 Medium, 512 px, fp16, batch size 1, gradient accumulation 4, gradient checkpointing, 8-bit Adam, frozen text encoders, and rank-8 attention LoRA.
-
-A dry run writes the command and config without starting a long training job:
-
-```python
-from sd35_lora_training import run_lora_training
-run_lora_training(dry_run=True)
-```
-
-A real run expects a prepared captioned/cropped training folder at `LORA_TRAINING_DATA_DIR` and a local Diffusers SD3 LoRA training script, for example `train_dreambooth_lora_sd3.py`. After training finishes, the helper exports the native adapter plus:
+Two independent sub-flows, no V5 copy:
 
 ```text
-/kaggle/working/sd35m-pedestrian-v1/pytorch_lora_weights.pt
-/kaggle/working/sd35m-pedestrian-v1/training_config.json
-/kaggle/working/sd35m-pedestrian-v1/training_provenance.json
+A. Data ETL + Train
+   raw datasets -> LoRA release -> train adapter -> model artifacts
+
+B. SD3.5 Inpaint Test
+   frozen test images + masks
+   -> SD3.5 inpaint baseline (B0)
+   -> SD3.5 inpaint + LoRA   (B1)
+   -> paired metrics + report
 ```
 
-`export_outputs()` now includes `LORA_TRAINING_OUTPUT_DIR`, so the final zip contains the `.pt` model artifact whenever the training output directory exists.
+There is **no** scale correction, semantic placement, object-only composite,
+harmonization, or autotune here. The inpaint test calls raw SD3.5 inpaint; the
+only difference between B0 and B1 is the trigger token in the prompt.
+
+## Layout
+
+```text
+LoRA/
+  configs/
+    sources.yaml            # sources, quality thresholds, split + eval ratios
+    prompt_templates.yaml   # trigger token + caption / validation / inpaint prompts
+    lora_train.yaml         # training hyperparameters + pinned trainer path
+    inpaint_eval.yaml       # baseline-vs-LoRA eval config
+  data/                     # ETL: ingest -> ... -> export -> validate + build_eval_cases
+    parsers/{yolo,mot,classification}.py
+  train/                    # train_sd35_lora, export_artifacts, provenance
+  inference/                # sd35_inpaint_runner, inpaint_metrics, report
+  notebooks/                # 01_build_lora_release, 02_train_sd35_lora, 03_test_sd35_inpaint_lora
+  tests/
+  vendor/diffusers/<commit>/train_dreambooth_lora_sd3.py   # pinned trainer
+```
+
+Notebooks hold **no** ETL/train/eval logic — they only call `LoRA.data`,
+`LoRA.train`, `LoRA.inference`. Import style is clean package imports
+(`from LoRA.data.pipeline import run_full_etl`); add the repo root to `sys.path`.
+
+## A. Data ETL (`notebooks/01_build_lora_release.ipynb`)
+
+```text
+00 ingest -> 01 normalize -> 02 dedupe/group -> 03 build eval cases
+-> 04 filter/crop -> 05 caption -> 06 split -> 07 export -> 08 validate
+```
+
+- **Sources** (`configs/sources.yaml`): CityPersons (YOLO), MOT17-02 (MOT),
+  Human Detection (classification). Per source, `lora_splits` feed the LoRA
+  release and `eval_splits` are frozen for the inpaint test (never train LoRA).
+  CityPersons `train` -> LoRA; CityPersons `valid` -> inpaint eval.
+- **Crops** keep pedestrian + 25% context (no transparent cutouts).
+- **Captions** are per-image and always contain the trigger token `<vin_ped>`;
+  attributes not present in annotations (gender, age, emotion) are never invented.
+- **Split** is group-aware (scene / sequence-window / dedupe cluster) so train
+  and val never share a scene.
+- **Eval cases** (`build_eval_cases`) come from the eval-locked splits and are
+  partitioned group-disjoint into `inpaint_eval_v1` (dev) and
+  `final_inpaint_test_v1` (touch once).
+
+`validate_release` hard-fails on: empty trigger token, any caption missing the
+trigger, empty train/val, unreadable crop, duplicate-cluster or group overlap
+between train/val, or any eval image/group leaking into the release. On success
+`release.json: dataset_status` flips to `validated`.
+
+## B. Train (`notebooks/02_train_sd35_lora.ipynb`)
+
+```text
+00 git SHA -> 01 GPU/deps -> 02 vendor pinned trainer -> 03 verify validated release
+-> 04 dry run -> 05 smoke 100 steps -> 06 1000 steps -> 07 zip artifacts
+```
+
+The trainer is pinned under `vendor/diffusers/<commit>/` (see its `VENDOR.md`) —
+never downloaded from `main` per run. The command runs in caption mode but always
+passes `--instance_prompt` (the Diffusers SD3 LoRA script requires it even with
+`--caption_column`). Loss is monitored live and training hard-fails on NaN/Inf.
+
+Run output (`models/<model_name>/run_NNN/`): `adapter/pytorch_lora_weights.safetensors`
+(canonical) + `.pt` (handoff), `checkpoints/`, `training_config.json`,
+`train_command.json`, `training_provenance.json`, `dataset_provenance.json`,
+`adapter_verification.json`, `adapter_sha256.txt`, `pip_freeze.txt`,
+`gpu_info.json`, `validation_prompts.json`. Adapter selection uses validation
+prompts + `lora_val`; the frozen eval is run once after config is locked.
+
+## C. Inpaint test (`notebooks/03_test_sd35_inpaint_lora.ipynb`)
+
+Loads frozen cases, runs B0 then B1 with **identical** image/mask/prompt-fields/
+seed/resolution/strength/guidance/steps/negative-prompt — only the trigger token
+differs. Per-case metrics (component metrics only, no fused score):
+
+`outside_mask_mae`, `outside_mask_ssim`, `person_detected`, `person_confidence`,
+`person_inside_mask_ratio`, `expected/detected_height`, `scale_ratio`,
+`edge_seam_score`, `runtime_seconds`, `cuda_peak_mb`.
+
+`report.build_paired_comparison` writes `metrics_per_case.csv`,
+`metrics_summary.json`, and `paired_comparison.csv` (per-metric `delta_*` =
+LoRA − baseline). The inpaint stack is pinned to `diffusers==0.35.2` /
+`transformers==4.46.3` / `accelerate==1.11.0` (see `configs/inpaint_eval.yaml`
+and notebook 03).
+
+## Trigger token
+
+`<vin_ped>` appears in 100% of train/val captions, the validation prompts, the
+training instance prompt, `training_provenance.json`, and the B1 inpaint prompt.
+It is a LoRA concept trigger, not a textual-inversion embedding (no tokenizer
+special token is added).
+
+## Tests
+
+`pytest LoRA/tests/` — release validation gates, caption contract, inpaint metric
+contract, provenance. (Requires `pandas`, `pyarrow`, `pillow`, `numpy`, `pyyaml`.)
