@@ -45,7 +45,12 @@ class SD35EditRunner:
         kw = {"torch_dtype": self.compute_dtype}
         if self.hf_token and not Path(self.base_model_id).exists():
             kw["token"] = self.hf_token
-        self.pipe = StableDiffusion3Pipeline.from_pretrained(self.base_model_id, **kw).to(self.device)
+        self.pipe = StableDiffusion3Pipeline.from_pretrained(self.base_model_id, **kw)
+        # SD3.5 + T5-XXL does NOT fit resident on a 16GB T4. Keep everything on CPU
+        # at load; edit() moves the text encoders to GPU only for encode_prompt, then
+        # frees them, keeping just transformer + VAE resident for the denoise loop
+        # (the same memory plan the trainer uses).
+        self.pipe.vae.enable_slicing()
         self.scheduler = FlowMatchEulerDiscreteScheduler.from_config(self.pipe.scheduler.config)
 
         # LoRA
@@ -76,6 +81,24 @@ class SD35EditRunner:
         src = source_img.convert("RGB").resize((resolution, resolution))
         msk = mask_img.convert("L").resize((resolution, resolution))
 
+        # --- encode prompt with text encoders shuttled to GPU, then back to CPU ---
+        # transformer + VAE stay resident on GPU; text encoders (incl. T5-XXL ~9GB)
+        # only briefly occupy GPU for encoding, so peak VRAM never holds all at once.
+        encs = [self.pipe.text_encoder, self.pipe.text_encoder_2, self.pipe.text_encoder_3]
+        for e in encs:
+            if e is not None:
+                e.to(device)
+        prompt_embeds, neg_embeds, pooled, neg_pooled = self.pipe.encode_prompt(
+            prompt, prompt_2=prompt, prompt_3=prompt,
+            negative_prompt=negative_prompt, negative_prompt_2=negative_prompt,
+            negative_prompt_3=negative_prompt, device=device,
+            num_images_per_prompt=1, do_classifier_free_guidance=False)
+        for e in encs:
+            if e is not None:
+                e.to("cpu")
+        self.pipe.transformer.to(device); self.pipe.vae.to(device)
+        import gc; gc.collect(); torch.cuda.empty_cache()
+
         def to_t(img, mode):
             a = np.asarray(img, dtype=np.float32) / 255.0
             t = (torch.from_numpy(a).permute(2, 0, 1) * 2 - 1) if mode == "RGB" else torch.from_numpy(a)[None]
@@ -84,12 +107,6 @@ class SD35EditRunner:
         src_t = to_t(src, "RGB"); mask_t = to_t(msk, "L")
         source_lat = _vae_encode(self.pipe.vae, src_t * (1 - mask_t))
         mask_lat = F.interpolate(mask_t, size=source_lat.shape[-2:])
-
-        prompt_embeds, neg_embeds, pooled, neg_pooled = self.pipe.encode_prompt(
-            prompt, prompt_2=prompt, prompt_3=prompt,
-            negative_prompt=negative_prompt, negative_prompt_2=negative_prompt,
-            negative_prompt_3=negative_prompt, device=device,
-            num_images_per_prompt=1, do_classifier_free_guidance=False)
 
         gen = torch.Generator(device=device).manual_seed(int(seed))
         latents = torch.randn(source_lat.shape, generator=gen, device=device, dtype=dtype)
