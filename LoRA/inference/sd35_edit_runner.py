@@ -69,7 +69,32 @@ class SD35EditRunner:
         self.input_adapter = InputAdapter().to(self.device, dtype=self.compute_dtype)
         self.input_adapter.load_state_dict(torch.load(ia_file, weights_only=True))
         self.input_adapter.eval()
+        self._embeds = {}        # prompt -> (prompt_embeds_cpu, pooled_cpu)
+        self._encoders_dropped = False
         return self
+
+    @torch.no_grad()
+    def precompute_embeds(self, prompts):
+        """Encode ALL prompts with the text encoders on GPU, cache to CPU, then
+        DROP the text encoders and move transformer + VAE to GPU. SD3.5 + T5-XXL
+        cannot be resident alongside the transformer on a 16GB T4, so this must
+        run ONCE before any edit() call (same plan the trainer uses)."""
+        if self._encoders_dropped:
+            return
+        device = self.device
+        for e in (self.pipe.text_encoder, self.pipe.text_encoder_2, self.pipe.text_encoder_3):
+            if e is not None:
+                e.to(device)
+        for p in dict.fromkeys(prompts):           # de-dup, preserve order
+            pe, _, pooled, _ = self.pipe.encode_prompt(
+                p, prompt_2=p, prompt_3=p, device=device,
+                num_images_per_prompt=1, do_classifier_free_guidance=False)
+            self._embeds[p] = (pe.to("cpu"), pooled.to("cpu"))
+        # free the encoders, then make room-clearing explicit
+        self.pipe.text_encoder = self.pipe.text_encoder_2 = self.pipe.text_encoder_3 = None
+        import gc; gc.collect(); torch.cuda.empty_cache()
+        self.pipe.transformer.to(device); self.pipe.vae.to(device)
+        self._encoders_dropped = True
 
     @torch.no_grad()
     def edit(self, source_img, mask_img, prompt, negative_prompt="", seed=42,
@@ -81,23 +106,11 @@ class SD35EditRunner:
         src = source_img.convert("RGB").resize((resolution, resolution))
         msk = mask_img.convert("L").resize((resolution, resolution))
 
-        # --- encode prompt with text encoders shuttled to GPU, then back to CPU ---
-        # transformer + VAE stay resident on GPU; text encoders (incl. T5-XXL ~9GB)
-        # only briefly occupy GPU for encoding, so peak VRAM never holds all at once.
-        encs = [self.pipe.text_encoder, self.pipe.text_encoder_2, self.pipe.text_encoder_3]
-        for e in encs:
-            if e is not None:
-                e.to(device)
-        prompt_embeds, neg_embeds, pooled, neg_pooled = self.pipe.encode_prompt(
-            prompt, prompt_2=prompt, prompt_3=prompt,
-            negative_prompt=negative_prompt, negative_prompt_2=negative_prompt,
-            negative_prompt_3=negative_prompt, device=device,
-            num_images_per_prompt=1, do_classifier_free_guidance=False)
-        for e in encs:
-            if e is not None:
-                e.to("cpu")
-        self.pipe.transformer.to(device); self.pipe.vae.to(device)
-        import gc; gc.collect(); torch.cuda.empty_cache()
+        # embeddings come from the one-time precompute (text encoders are gone)
+        if prompt not in self._embeds:
+            self.precompute_embeds([prompt])
+        pe_cpu, pooled_cpu = self._embeds[prompt]
+        prompt_embeds, pooled = pe_cpu.to(device), pooled_cpu.to(device)
 
         def to_t(img, mode):
             a = np.asarray(img, dtype=np.float32) / 255.0
