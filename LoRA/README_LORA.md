@@ -6,8 +6,15 @@
 > the value is in *edit* behavior learned from before/after pairs (PIPE). SD3.5
 > has no official inpaint/edit trainer, so we hand-rolled one. A single-pair
 > overfit spike (notebook `00`, collapse_ratio 0.18) confirmed the edit
-> conditioning is wired correctly. Training: notebook `05` /
-> `train/train_inpaint_edit.py`. Inference + eval (D2) is being built next.
+> conditioning is wired correctly.
+>
+> - **Train** (D1): notebook `05` / `train/train_inpaint_edit.py`. Smoke verified
+>   (loss 0.34 → 0.22). Exports `pytorch_lora_weights.safetensors` **and**
+>   `input_adapter.pt` (the 33→16 edit conv) — BOTH required at inference.
+> - **Inference + eval** (D2): `inference/sd35_edit_runner.py` runs the full
+>   denoise loop, reconstructing the edit conditioning each step, then
+>   hard-restores the background; notebook `06` evaluates on the PIPE golden set
+>   and emits a contact sheet for manual check.
 >
 > The concept-LoRA + reconstruction-eval pieces below remain for comparison /
 > the detector-utility track, but the edit flow is the headline.
