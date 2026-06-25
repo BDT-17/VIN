@@ -67,7 +67,10 @@ def run_spike(pairs, base_model_id="stabilityai/stable-diffusion-3.5-medium",
     import numpy as np
 
     out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
-    _kw = {"torch_dtype": torch.float16}
+    # bf16 (not fp16) for compute: fp16 flow-matching training NaNs immediately
+    # because fp16's narrow range overflows. T4 supports bf16 compute.
+    compute_dtype = torch.bfloat16
+    _kw = {"torch_dtype": compute_dtype}
     if hf_token and not Path(base_model_id).exists():
         _kw["token"] = hf_token
     pipe = StableDiffusion3Pipeline.from_pretrained(base_model_id, **_kw)
@@ -79,7 +82,7 @@ def run_spike(pairs, base_model_id="stabilityai/stable-diffusion-3.5-medium",
             t = torch.from_numpy(a).permute(2, 0, 1) * 2 - 1  # [-1,1]
         else:
             t = torch.from_numpy(a)[None]                      # [1,H,W] 0..1
-        return t.unsqueeze(0).to(dev, dtype=torch.float16)
+        return t.unsqueeze(0).to(dev, dtype=compute_dtype)
 
     # ---- T4-friendly memory plan ----
     # SD3.5 + T5-XXL does NOT fit on a 16GB T4 all-resident. So:
@@ -111,8 +114,12 @@ def run_spike(pairs, base_model_id="stabilityai/stable-diffusion-3.5-medium",
         r=rank, lora_alpha=rank, init_lora_weights="gaussian",
         target_modules=["to_k", "to_q", "to_v", "to_out.0"]))
 
-    adapter = InputAdapter().to(device, dtype=torch.float16)
+    # Trainable params (LoRA + adapter) kept in fp32 for stable optimizer math;
+    # the frozen backbone stays bf16. Forward runs under bf16 autocast.
     lora_params = [p for p in transformer.parameters() if p.requires_grad]
+    for p in lora_params:
+        p.data = p.data.float()
+    adapter = InputAdapter().to(device, dtype=torch.float32)
     opt = torch.optim.AdamW(lora_params + list(adapter.parameters()), lr=lr)
 
     losses = []
@@ -138,15 +145,18 @@ def run_spike(pairs, base_model_id="stabilityai/stable-diffusion-3.5-medium",
         sigma = (timesteps / noise_sched.config.num_train_timesteps).view(-1, 1, 1, 1).to(target_lat.dtype)
         noisy = (1.0 - sigma) * target_lat + sigma * noise
 
-        cond = adapter(noisy, source_lat, mask_lat)
-        pred = transformer(hidden_states=cond, timestep=timesteps,
-                           encoder_hidden_states=prompt_embeds.to(target_lat.dtype),
-                           pooled_projections=pooled.to(target_lat.dtype),
-                           return_dict=False)[0]
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            cond = adapter(noisy, source_lat, mask_lat)
+            pred = transformer(hidden_states=cond, timestep=timesteps,
+                               encoder_hidden_states=prompt_embeds,
+                               pooled_projections=pooled,
+                               return_dict=False)[0]
         target_v = noise - target_lat
         loss = F.mse_loss(pred.float(), target_v.float())
 
-        opt.zero_grad(); loss.backward(); opt.step()
+        opt.zero_grad(); loss.backward()
+        torch.nn.utils.clip_grad_norm_(lora_params + list(adapter.parameters()), 1.0)
+        opt.step()
         if not math.isfinite(loss.item()):
             raise RuntimeError(f"SPIKE FAIL: non-finite loss at step {step}")
         losses.append(loss.item())
