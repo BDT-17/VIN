@@ -71,11 +71,40 @@ def run_spike(pairs, base_model_id="stabilityai/stable-diffusion-3.5-medium",
     if hf_token and not Path(base_model_id).exists():
         _kw["token"] = hf_token
     pipe = StableDiffusion3Pipeline.from_pretrained(base_model_id, **_kw)
-    pipe = pipe.to(device)
+
+    def load_img(p, mode="RGB", dev="cpu"):
+        im = Image.open(p).convert(mode).resize((resolution, resolution))
+        a = np.asarray(im, dtype=np.float32) / 255.0
+        if mode == "RGB":
+            t = torch.from_numpy(a).permute(2, 0, 1) * 2 - 1  # [-1,1]
+        else:
+            t = torch.from_numpy(a)[None]                      # [1,H,W] 0..1
+        return t.unsqueeze(0).to(dev, dtype=torch.float16)
+
+    # ---- T4-friendly memory plan ----
+    # SD3.5 + T5-XXL does NOT fit on a 16GB T4 all-resident. So:
+    #   1) precompute ALL text embeddings on GPU, then drop the 3 text encoders,
+    #   2) keep only VAE + transformer resident for the training loop.
+    pipe.text_encoder.to(device); pipe.text_encoder_2.to(device)
+    if pipe.text_encoder_3 is not None:
+        pipe.text_encoder_3.to(device)
+    embeds = []
+    with torch.no_grad():
+        for item in pairs:
+            pe, _, pooled, _ = pipe.encode_prompt(
+                item["prompt"], prompt_2=item["prompt"], prompt_3=item["prompt"],
+                device=device, num_images_per_prompt=1, do_classifier_free_guidance=False)
+            embeds.append((pe.to("cpu"), pooled.to("cpu")))
+    # free text encoders + their VRAM
+    pipe.text_encoder = pipe.text_encoder_2 = pipe.text_encoder_3 = None
+    import gc; gc.collect(); torch.cuda.empty_cache()
+
     vae, transformer = pipe.vae, pipe.transformer
+    vae.to(device); transformer.to(device)
     noise_sched = FlowMatchEulerDiscreteScheduler.from_config(pipe.scheduler.config)
 
     vae.requires_grad_(False); transformer.requires_grad_(False)
+    transformer.enable_gradient_checkpointing()
 
     # LoRA on attention (same target modules as the official SD3 script)
     transformer.add_adapter(LoraConfig(
@@ -86,31 +115,21 @@ def run_spike(pairs, base_model_id="stabilityai/stable-diffusion-3.5-medium",
     lora_params = [p for p in transformer.parameters() if p.requires_grad]
     opt = torch.optim.AdamW(lora_params + list(adapter.parameters()), lr=lr)
 
-    def load_img(p, mode="RGB"):
-        im = Image.open(p).convert(mode).resize((resolution, resolution))
-        a = np.asarray(im, dtype=np.float32) / 255.0
-        if mode == "RGB":
-            t = torch.from_numpy(a).permute(2, 0, 1) * 2 - 1  # [-1,1]
-        else:
-            t = torch.from_numpy(a)[None]                      # [1,H,W] 0..1
-        return t.unsqueeze(0).to(device, dtype=torch.float16)
-
     losses = []
     transformer.train()
     for step in range(steps):
-        item = pairs[step % len(pairs)]
-        target = load_img(item["target_path"])
-        source = load_img(item["source_path"])
-        mask = load_img(item["mask_path"], mode="L")            # 1 == editable
+        idx_pair = step % len(pairs)
+        item = pairs[idx_pair]
+        target = load_img(item["target_path"], dev=device)
+        source = load_img(item["source_path"], dev=device)
+        mask = load_img(item["mask_path"], mode="L", dev=device)   # 1 == editable
 
         with torch.no_grad():
             target_lat = _vae_encode(vae, target)
             source_lat = _vae_encode(vae, source * (1 - mask))  # source w/ hole
             lat_h, lat_w = target_lat.shape[-2:]
             mask_lat = F.interpolate(mask, size=(lat_h, lat_w))
-            prompt_embeds, _, pooled, _ = pipe.encode_prompt(
-                item["prompt"], prompt_2=item["prompt"], prompt_3=item["prompt"],
-                device=device, num_images_per_prompt=1, do_classifier_free_guidance=False)
+            prompt_embeds, pooled = (e.to(device) for e in embeds[idx_pair])
 
         noise = torch.randn_like(target_lat)
         u = torch.rand(1, device=device)
