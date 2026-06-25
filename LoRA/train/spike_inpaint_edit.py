@@ -55,15 +55,22 @@ class InputAdapter(torch.nn.Module):
 
 def run_spike(pairs, base_model_id="stabilityai/stable-diffusion-3.5-medium",
               steps=50, rank=8, lr=1e-4, resolution=512, device="cuda",
-              out_dir="/kaggle/working/spike_inpaint_edit"):
-    """pairs: list of dicts {source_path, target_path, mask_path, prompt}."""
+              out_dir="/kaggle/working/spike_inpaint_edit", hf_token=None):
+    """pairs: list of dicts {source_path, target_path, mask_path, prompt}.
+
+    base_model_id may be a HF repo id (gated -> needs hf_token) OR a local path
+    to a mounted SD3.5 snapshot (e.g. /kaggle/input/stable-diffusion-3-5-medium).
+    """
     from diffusers import StableDiffusion3Pipeline, FlowMatchEulerDiscreteScheduler
     from peft import LoraConfig
     from PIL import Image
     import numpy as np
 
     out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
-    pipe = StableDiffusion3Pipeline.from_pretrained(base_model_id, torch_dtype=torch.float16)
+    _kw = {"torch_dtype": torch.float16}
+    if hf_token and not Path(base_model_id).exists():
+        _kw["token"] = hf_token
+    pipe = StableDiffusion3Pipeline.from_pretrained(base_model_id, **_kw)
     pipe = pipe.to(device)
     vae, transformer = pipe.vae, pipe.transformer
     noise_sched = FlowMatchEulerDiscreteScheduler.from_config(pipe.scheduler.config)
