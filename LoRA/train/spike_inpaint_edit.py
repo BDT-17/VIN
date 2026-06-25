@@ -55,11 +55,17 @@ class InputAdapter(torch.nn.Module):
 
 def run_spike(pairs, base_model_id="stabilityai/stable-diffusion-3.5-medium",
               steps=50, rank=8, lr=1e-4, resolution=512, device="cuda",
-              out_dir="/kaggle/working/spike_inpaint_edit", hf_token=None):
+              out_dir="/kaggle/working/spike_inpaint_edit", hf_token=None,
+              overfit=False, fixed_timestep_frac=0.5):
     """pairs: list of dicts {source_path, target_path, mask_path, prompt}.
 
     base_model_id may be a HF repo id (gated -> needs hf_token) OR a local path
     to a mounted SD3.5 snapshot (e.g. /kaggle/input/stable-diffusion-3-5-medium).
+
+    overfit=True is the decisive sanity check: train on EXACTLY ONE pair at a
+    FIXED timestep. If the conditioning is wired correctly the model memorizes
+    that pair and loss collapses toward ~0. A flat loss means the conditioning
+    (adapter / latents / mask) is not actually informing the prediction.
     """
     from diffusers import StableDiffusion3Pipeline, FlowMatchEulerDiscreteScheduler
     from peft import LoraConfig
@@ -74,6 +80,9 @@ def run_spike(pairs, base_model_id="stabilityai/stable-diffusion-3.5-medium",
     if hf_token and not Path(base_model_id).exists():
         _kw["token"] = hf_token
     pipe = StableDiffusion3Pipeline.from_pretrained(base_model_id, **_kw)
+
+    if overfit:
+        pairs = pairs[:1]   # decisive single-pair memorization test
 
     def load_img(p, mode="RGB", dev="cpu"):
         im = Image.open(p).convert(mode).resize((resolution, resolution))
@@ -139,7 +148,13 @@ def run_spike(pairs, base_model_id="stabilityai/stable-diffusion-3.5-medium",
             prompt_embeds, pooled = (e.to(device) for e in embeds[idx_pair])
 
         noise = torch.randn_like(target_lat)
-        u = torch.rand(1, device=device)
+        if overfit:
+            # same noise + same timestep every step -> pure memorization signal
+            torch.manual_seed(0)
+            noise = torch.randn(target_lat.shape, device=device, dtype=target_lat.dtype)
+            u = torch.tensor([fixed_timestep_frac], device=device)
+        else:
+            u = torch.rand(1, device=device)
         idx = (u * noise_sched.config.num_train_timesteps).long()
         timesteps = noise_sched.timesteps.to(device)[idx]
         sigma = (timesteps / noise_sched.config.num_train_timesteps).view(-1, 1, 1, 1).to(target_lat.dtype)
@@ -163,16 +178,35 @@ def run_spike(pairs, base_model_id="stabilityai/stable-diffusion-3.5-medium",
         if step % 10 == 0:
             print(f"  step {step:3d}  loss {loss.item():.4f}")
 
-    first = sum(losses[:5]) / min(5, len(losses))
-    last = sum(losses[-5:]) / min(5, len(losses))
+    n = len(losses)
+    first = sum(losses[:5]) / min(5, n)
+    last = sum(losses[-5:]) / min(5, n)
+    min_loss = min(losses)
     verdict = {
-        "steps": steps, "loss_first5_mean": round(first, 4),
-        "loss_last5_mean": round(last, 4), "loss_dropped": last < first,
+        "mode": "overfit" if overfit else "noisy",
+        "steps": steps, "num_pairs": len(pairs),
+        "loss_first5_mean": round(first, 4),
+        "loss_last5_mean": round(last, 4),
+        "loss_min": round(min_loss, 4),
         "all_finite": all(math.isfinite(x) for x in losses),
     }
+    if overfit:
+        # decisive: a correctly-wired single-pair memorization collapses loss.
+        ratio = last / first if first > 0 else 1.0
+        verdict["collapse_ratio"] = round(ratio, 4)
+        verdict["passed"] = bool(verdict["all_finite"] and ratio < 0.3)
+    else:
+        verdict["loss_dropped"] = last < first
+        verdict["passed"] = bool(verdict["all_finite"] and last < first)
+
     import json
     (out_dir / "spike_verdict.json").write_text(json.dumps(verdict, indent=2))
     print("\nSPIKE VERDICT:", verdict)
-    print("PASS — conditioning wired, loss trends down" if verdict["loss_dropped"]
-          else "INCONCLUSIVE — loss did not drop; revisit adapter/conditioning")
+    if overfit:
+        print("PASS — single pair memorized, loss collapsed: conditioning is WIRED"
+              if verdict["passed"]
+              else "FAIL — loss did not collapse on ONE pair: conditioning is NOT informing the prediction")
+    else:
+        print("PASS — loss trends down" if verdict["passed"]
+              else "INCONCLUSIVE — noisy; run overfit=True for a decisive check")
     return verdict
