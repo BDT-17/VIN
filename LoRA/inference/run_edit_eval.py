@@ -27,6 +27,7 @@ def main():
     ap.add_argument("--base-model", required=True)
     ap.add_argument("--out-dir", default=None)
     ap.add_argument("--steps", type=int, default=30)
+    ap.add_argument("--limit", type=int, default=None, help="cap number of eval cases")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--hf-token", default=None)
     args = ap.parse_args()
@@ -45,6 +46,8 @@ def main():
     (out / "images").mkdir(parents=True, exist_ok=True)
 
     cases = [json.loads(l) for l in (eval_dir / "cases.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    if args.limit is not None:
+        cases = cases[:args.limit]
     print(f"[eval] {len(cases)} cases")
 
     runner, prov = load_edit_runner_from_run(run_dir, base_model_id=args.base_model, hf_token=args.hf_token)
@@ -56,14 +59,18 @@ def main():
 
     runner.precompute_embeds([case_prompt(c) for c in cases])
 
+    import time
     rows = []
-    for c in cases:
+    for i, c in enumerate(cases):
         src = Image.open(eval_dir / c["image_path"]); msk = Image.open(eval_dir / c["mask_path"])
+        te = time.time()
         img = runner.edit(src, msk, case_prompt(c), seed=args.seed, num_inference_steps=args.steps)
         p = out / "images" / f"{c['case_id']}.png"; img.save(p)
         m = compute_case_metrics(eval_dir / c["reference_path"], p, eval_dir / c["mask_path"],
                                  c["expected_bbox_xyxy"], detector=None)
         m["case_id"] = c["case_id"]; rows.append(m)
+        print(f"[eval] {i+1}/{len(cases)} {c['case_id']}  {time.time()-te:.1f}s  "
+              f"inside_mask={m.get('person_inside_mask_ratio')}", flush=True)
     print(f"[eval] generated {len(rows)} edits")
 
     if rows:
