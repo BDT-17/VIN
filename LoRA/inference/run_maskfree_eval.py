@@ -27,6 +27,7 @@ def main():
     ap.add_argument("--base-model", required=True)
     ap.add_argument("--out-dir", default=None)
     ap.add_argument("--steps", type=int, default=30)
+    ap.add_argument("--limit", type=int, default=None, help="cap number of eval cases")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--s-image", type=float, default=1.5)
     ap.add_argument("--s-text", type=float, default=7.5)
@@ -45,6 +46,8 @@ def main():
     (out / "images").mkdir(parents=True, exist_ok=True)
 
     cases = [json.loads(l) for l in (eval_dir / "cases.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    if args.limit is not None:
+        cases = cases[:args.limit]
     print(f"[eval] {len(cases)} cases")
 
     runner, prov = load_maskfree_runner_from_run(run_dir, base_model_id=args.base_model, hf_token=args.hf_token)
@@ -56,13 +59,16 @@ def main():
 
     runner.precompute_embeds([case_prompt(c) for c in cases])
 
-    for c in cases:
+    import time
+    for i, c in enumerate(cases):
         # mask-free uses the object-erased source as input (PIPE 'image_path')
         src = Image.open(eval_dir / c["image_path"]).convert("RGB")
+        te = time.time()
         img = runner.edit(src, case_prompt(c), seed=args.seed,
                           num_inference_steps=args.steps,
                           s_image=args.s_image, s_text=args.s_text)
         img.save(out / "images" / f"{c['case_id']}.png")
+        print(f"[eval] {i+1}/{len(cases)} {c['case_id']}  {time.time()-te:.1f}s", flush=True)
     print(f"[eval] generated {len(cases)} edits")
 
     # contact sheet: source | edit | target(real)

@@ -1,142 +1,158 @@
-"""Add-it CityPersons augmentation: configuration.
+"""Add-it configuration — faithful re-implementation (paper §3, App A.1).
 
-All Add-it-specific parameters live here.  Parent pipeline config
-(dataset paths, YOLO thresholds, placement rules, etc.) is imported
-from the existing ``sd35_config`` / ``sd35_utils`` modules via sys.path.
+Every constant traces to a specific place in Tewel et al., ICLR 2025
+(arXiv:2411.07232).  The paper targets FLUX.1-dev; this port runs on SD3.5
+Medium, so FLUX-specific *integer* timesteps and *absolute* layer indices are
+re-expressed as **fractions** of SD3.5's schedule/stack.  Each such constant is
+flagged ``SD3.5-ADAPT`` and explained in ``docs/addit_paper_fidelity.md``.
+
+This file deliberately does NOT import the parent ``sd35_config`` placement /
+detector / variant machinery: Add-it decides object placement *itself* (its
+affordance thesis), so there is no insertion-bbox, no YOLO cutout-paste, and no
+``find_insertion_region``.  Only the few model/runtime constants Add-it needs
+(model id, resolution, device) are pulled in.
 """
 
 from pathlib import Path
 import sys
 
-# ---------------------------------------------------------------------------
-# Make the repository root importable so we can reuse
-# sd35_config, sd35_data, sd35_utils, sd35_evaluation, sd35_model.
-# ---------------------------------------------------------------------------
+# Make the repo root importable for the handful of shared runtime constants.
 _PARENT_DIR = str(Path(__file__).resolve().parent.parent)
 if _PARENT_DIR not in sys.path:
     sys.path.insert(0, _PARENT_DIR)
 
-# Re-export everything from the parent config so downstream code can do
-# ``from addit_config import *`` and get both parent and Add-it symbols.
-from sd35_config import *  # noqa: F401,F403
+# Pull ONLY what Add-it needs from the parent config (model id, resolution,
+# device, T5 flag).  We avoid ``import *`` so none of the augmentation-flow
+# placement/validation knobs leak into this faithful flow.
+from sd35_config import (  # noqa: F401
+    SD35_MODEL_ID,
+    MODEL_BACKEND,
+    RESOLUTION,
+    TRAIN_DEVICE,
+    USE_T5,
+    SEED,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 1. Weighted Extended-Attention
+# 0. Backbone / runtime
 # ═══════════════════════════════════════════════════════════════════════════
-ADDIT_WEIGHTED_EXTENDED_ATTENTION = True   # Enable extended attention
-ADDIT_ATTENTION_SCHEDULE = "cosine"       # cosine | linear | constant
-ADDIT_W_SOURCE_START     = 0.42           # lower source pull so the edit is not copied away
-ADDIT_W_SOURCE_END       = 0.02           # keep late denoising focused on the generated person
-ADDIT_W_SELF_START       = 0.38           # stronger target latent stream for visible insertion
-ADDIT_W_SELF_END         = 0.88           # preserve target detail late in denoising
-# Text weight = 1 - w_source - w_self (implicit, clamped ≥ 0.05)
-ADDIT_ATTENTION_LAYER_RANGE = (0.0, 1.0)  # fraction of layers to inject (0=first, 1=all)
+# SD3.5-ADAPT: the paper uses FLUX.1-dev.  We run SD3.5 Medium (the repo's
+# model).  The mechanism is identical; only the schedule/layer constants below
+# are re-derived.
+ADDIT_BACKBONE = "sd35"                       # informational; loader builds SD3.5
+ADDIT_NUM_INFERENCE_STEPS = 30                # paper: 30 denoising steps (App A.1)
+ADDIT_GUIDANCE_SCALE = 5.0                    # SD3.5 CFG (FLUX uses distilled guidance; SD3.5 needs real CFG)
+ADDIT_SEED = 42
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 2. Noise Structure Transfer
-# ═══════════════════════════════════════════════════════════════════════════
-ADDIT_STRUCTURE_STRENGTH  = 0.82          # stronger edit budget inside the insertion region
-ADDIT_NOISE_BLEND_RATIO   = 0.72          # less source-correlated noise so new people emerge
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 3. Subject-Guided Latent Blending
-# ═══════════════════════════════════════════════════════════════════════════
-ADDIT_GENERATOR_BACKEND = "flux"          # flux = paper-style generate -> segment -> paste; sd35 = custom Add-it denoise
-ADDIT_FLUX_MODEL_ID = "black-forest-labs/FLUX.1-dev"
-ADDIT_FLUX_USE_INPAINT = False            # img2img is lighter; final YOLO cutout/paste still preserves source pixels
-ADDIT_FLUX_CPU_OFFLOAD_MODE = "sequential"  # sequential | model | none; sequential fits 14-16GB GPUs better
-ADDIT_FLUX_ENCODE_PROMPT_ON_CPU = True    # avoid CLIP/T5 OOM before FLUX denoising on 14-16GB GPUs
-ADDIT_FLUX_MAX_SEQUENCE_LENGTH = 128       # lower than FLUX default 512 to reduce text/attention memory
-ADDIT_FLUX_TRUE_CFG_SCALE = 1.0            # >1 enables negative_prompt CFG in recent diffusers FLUX pipelines
-ADDIT_FLUX_MASK_PADDING_RATIO = 0.10       # small context around bbox for inpaint mask
-ADDIT_FLUX_MASK_BLUR_PX = 0.0              # keep generated region bounded; final cutout handles edges
-
-ADDIT_BLEND_FEATHER_LATENT  = 3           # tighter edge; less source overwrite inside the person region
-ADDIT_BLEND_START_RATIO     = 0.0         # blending active from this step ratio
-ADDIT_BLEND_END_RATIO       = 1.0        # blending stops at this step ratio (higher preserves background longer)
-ADDIT_MASK_DILATION_LATENT  = 5           # give legs/feet enough latent space to form
-ADDIT_MASK_EXPANSION_RATIO  = 1.60        # larger edit island; final YOLO cutout still preserves BG
-ADDIT_FINAL_PIXEL_COMPOSITE = True        # restore original pixels outside insertion region after VAE decode
-ADDIT_FINAL_COMPOSITE_MODE  = "bbox"      # bbox = exact background outside bbox; silhouette = tighter person mask
-ADDIT_FINAL_COMPOSITE_FEATHER_PX = 0      # 0 preserves outside pixels exactly; >0 softens the boundary
-ADDIT_FINAL_PERSON_CUTOUT = True          # after Add-it generation, cut detected person and paste onto source
-ADDIT_PERSON_CUTOUT_CONF = 0.18           # YOLO-seg confidence for extracting generated person
-ADDIT_PERSON_CUTOUT_MASK_THRESHOLD = 92    # tighter silhouette; discard generated-background fringe
-ADDIT_PERSON_CUTOUT_DILATE_PX = 0          # do not grow the person mask beyond the segmentation edge
-ADDIT_PERSON_CUTOUT_FEATHER_PX = 0.25      # sub-pixel edge blend only
-ADDIT_PERSON_CUTOUT_EDGE_MIN_ALPHA = 44    # alpha below this becomes background
-ADDIT_PERSON_CUTOUT_EDGE_FULL_ALPHA = 150  # alpha above this keeps generated person fully
-ADDIT_PERSON_CUTOUT_RECOVER_WEAK_LOWER_BODY = False
-ADDIT_PERSON_CUTOUT_BBOX_EXPANSION_RATIO = 1.08  # clip selected mask close to planned insertion region
-ADDIT_PERSON_CUTOUT_FALLBACK_TO_BBOX = False  # never paste the whole insert bbox when segmentation fails
-ADDIT_PERSON_CUTOUT_CONTRAST_BOOST = 1.18  # make added person less washed out before masked paste
-ADDIT_PERSON_CUTOUT_SHARPNESS_BOOST = 1.35 # sharpen only generated person pixels; source BG is untouched
-ADDIT_REQUIRE_PERSON_CUTOUT = True         # reject/retry if no generated person mask is extracted
-ADDIT_MIN_PERSON_CUTOUT_AREA_RATIO = 0.00035  # reject tiny masks that are unlikely to be useful people
-ADDIT_MIN_PERSON_CUTOUT_MAE_255 = 3.0      # reject outputs that are effectively identical to source
-ADDIT_MIN_PERSON_CUTOUT_SHARPNESS = 4.0    # reject very blurry generated-person cutouts
-
-# Multi-GPU Add-it runtime. The notebook loads SD3.5 on GPU 0, then moves the
-# MM-DiT transformer to GPU 1 when available. VAE/text stay on GPU 0.
-ADDIT_USE_TWO_GPUS = True
+# Single-GPU by default; the loop can temporarily move the transformer to a
+# second GPU when present (kept from the original scaffold, optional).
+ADDIT_USE_TWO_GPUS = False
 ADDIT_PRIMARY_DEVICE = "cuda:0"
 ADDIT_TRANSFORMER_DEVICE = "cuda:1"
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 4. Generation Defaults (can be overridden per-variant)
+# 1. Weighted Extended Self-Attention  (paper §3.2, eq. 3)
 # ═══════════════════════════════════════════════════════════════════════════
-ADDIT_NUM_INFERENCE_STEPS = 28
-ADDIT_GUIDANCE_SCALE      = 3.5
-ADDIT_SEED                = 42
-ADDIT_FALLBACK_TO_NATIVE_IMG2IMG = False # flux is the primary generator for this experimental flow
-ADDIT_ADAPTIVE_RETRY_ENABLED = True      # adapt prompt/params after each rejection reason
-ADDIT_ADAPTIVE_MAX_STRENGTH_DELTA = 0.14
-ADDIT_ADAPTIVE_MAX_GUIDANCE_DELTA = 1.20
-ADDIT_ADAPTIVE_MAX_EXTRA_STEPS = 12
+ADDIT_EXTENDED_ATTENTION = True
 
-# Per-variant overrides (mirroring parent VARIANT_PROFILE structure).
-ADDIT_VARIANT_OVERRIDES = {
-    "add_single_pedestrian":   {"strength": 0.88, "guidance": 3.5, "steps": 28},
-    "add_two_pedestrians":     {"strength": 0.90, "guidance": 3.5, "steps": 30},
-    "add_small_group":         {"strength": 0.92, "guidance": 3.5, "steps": 30},
-    "add_occluded_pedestrian": {"strength": 0.90, "guidance": 3.5, "steps": 30},
-    "add_distant_pedestrian":  {"strength": 0.84, "guidance": 3.3, "steps": 28},
-    "add_near_pedestrian":     {"strength": 0.92, "guidance": 3.7, "steps": 30},
-}
+# γ balancing.  Paper: solve f(γ)=A_source−A_target=0 with a root-solver; the
+# validated average is γ≈1.05.  γ multiplies the TARGET keys; source keys = 1,
+# prompt keys = 1.
+ADDIT_GAMMA_MODE = "auto"                     # "auto" (root-solver) | "fixed"
+ADDIT_GAMMA_FIXED = 1.05                      # paper's validated default
+ADDIT_GAMMA_SOURCE = 1.0                      # γ_s — held at 1 (paper)
+ADDIT_GAMMA_SEARCH_LO = 0.6                   # root-solver bracket
+ADDIT_GAMMA_SEARCH_HI = 1.6
+ADDIT_GAMMA_SOLVE_ITERS = 12
+ADDIT_GAMMA_SOLVE_EVERY = 5                   # re-solve γ every N steps (probe is extra forwards)
+
+# Extended-attention layer window.
+# SD3.5-ADAPT: paper applies extended attention in FLUX multi-stream blocks up
+# to t=670 and single-stream up to t=340.  SD3.5 has ONE block type (24 dual-
+# stream blocks), so the per-layer split is collapsed to "all layers"; the
+# *timestep* gating is handled by ADDIT_ATTENTION_T_FRAC below.
+ADDIT_ATTENTION_LAYER_FRAC = (0.0, 1.0)       # fraction of the 24-block stack
+
+# SD3.5-ADAPT: paper stops extended attention partway through denoising
+# (t=670/1000 ≈ 0.67 of the way from full-noise).  We gate by remaining-noise
+# fraction: inject while σ_t ≥ this (i.e. early/mid denoising), matching the
+# paper's "apply early, release late" schedule.
+ADDIT_ATTENTION_SIGMA_MIN = 0.34              # ≈ 340/1000; inject while σ_t ≥ 0.34
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 5. Prompt Templates
+# 2. Structure Transfer  (paper §3.3, App A.1)
 # ═══════════════════════════════════════════════════════════════════════════
-ADDIT_SOURCE_PROMPT = "urban street photo, city scene, natural lighting"
+# Paper: start denoising from the source noised to a FIXED high t_struct.
+#   t_struct = 933 for generated images, 867 for real images (out of 1000).
+# SD3.5-ADAPT: expressed as a fraction of num_train_timesteps (≈ σ at start).
+ADDIT_T_STRUCT_FRAC_REAL = 0.867              # 867/1000 — real source images
+ADDIT_T_STRUCT_FRAC_GEN = 0.933               # 933/1000 — generated source images
+ADDIT_SOURCE_IS_REAL = True                   # CityPersons frames are real photos
 
-ADDIT_TARGET_PROMPTS = {
-    "add_single_pedestrian":   "urban street photo with one newly added, clearly visible, sharp full-body pedestrian walking on the sidewalk, distinct foreground silhouette, visible legs and feet",
-    "add_two_pedestrians":     "urban street photo with two newly added, clearly visible, separate full-body pedestrians walking on the sidewalk, visible legs and feet",
-    "add_small_group":         "urban street photo with three newly added, clearly visible, separate full-body pedestrians in a small group on the sidewalk",
-    "add_occluded_pedestrian": "urban street photo with a newly added, clearly visible partly occluded full-body pedestrian behind a foreground object, visible body and feet",
-    "add_distant_pedestrian":  "urban street photo with a newly added distant but clearly visible full-body pedestrian, detectable silhouette",
-    "add_near_pedestrian":     "urban street photo with a newly added near larger sharp full-body pedestrian walking, clear clothing, visible legs and feet",
-}
+# ═══════════════════════════════════════════════════════════════════════════
+# 3. Subject-Guided Latent Blending  (paper §3.4, App A.1)
+# ═══════════════════════════════════════════════════════════════════════════
+ADDIT_LATENT_BLENDING = True
 
-ADDIT_NEGATIVE_PROMPT = (
-    "cropped, missing head, missing legs, thin body, giant, closeup, "
-    "floating, ghost, bad perspective, hard seam, overlap, "
-    "merged people, fused bodies, blurry, low quality, faded, transparent, "
-    "low contrast, blended into background, unchanged image, no new person"
+# Paper: blend at a single timestep t_blend = 500 / 1000.
+ADDIT_T_BLEND_FRAC = 0.50                     # 500/1000
+
+# Subject-attention capture window.
+# SD3.5-ADAPT: paper's mask layers are FLUX [13,14,18, single-23, single-33].
+# Those sit at relative depths ≈ {0.68, 0.74, 0.95} of the multi-stream stack
+# and ≈ {0.60, 0.87} of the single-stream stack.  Mapped onto SD3.5's 24 blocks
+# we take the corresponding mid-to-deep fractions:
+ADDIT_MASK_LAYER_FRACS = (0.55, 0.60, 0.68, 0.75, 0.90)
+
+# Capture subject attention over these step ratios (the paper aggregates over
+# "specific timesteps and layers"; we aggregate over the mid denoising window
+# leading up to t_blend, where subject structure is well-formed).
+ADDIT_SUBJECT_CAPTURE_START_FRAC = 0.20       # start ratio (0=first step)
+ADDIT_SUBJECT_CAPTURE_END_FRAC = 0.55         # end ratio (~ at t_blend)
+
+# Point sampling for SAM-2 (paper App A.1).
+ADDIT_MASK_MAX_POINTS = 4                     # up to 4 points
+ADDIT_MASK_POINT_REL_THRESH = 0.35            # stop below 0.35 · p_max
+ADDIT_MASK_POINT_EXCLUDE_FRAC = 0.10          # neighborhood excluded between picks
+
+# Mask post-processing.
+ADDIT_MASK_DILATE_PX = 4                      # small grow so shadows/contact stay inside M
+ADDIT_MASK_FEATHER_PX = 2                     # soft blend edge
+
+# After decode, optionally enforce pixel-exact source outside the refined mask
+# (paper's latent blend keeps the background latent; this hardens it in pixels).
+ADDIT_FINAL_PIXEL_COMPOSITE = True
+
+ADDIT_USE_SAM2 = True                         # soft: falls back to Otsu mask if unavailable
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 4. Prompting  (paper §3 + App A.7 — TARGET prompts, not instructions)
+# ═══════════════════════════════════════════════════════════════════════════
+# Add-it conditions on a *target prompt* describing the edited image, plus a
+# *subject token* (the single noun naming the added object).  The model decides
+# where to place it.  No insertion bbox, no per-variant placement profiles.
+ADDIT_DEFAULT_TARGET_PROMPT = (
+    "a photo of a city street with a pedestrian walking"
 )
+ADDIT_DEFAULT_SUBJECT_TOKEN = "pedestrian"
+
+# SD3.5 needs real CFG, so a light negative prompt is allowed (FLUX-dev used
+# distilled guidance with no negative).  Keep it minimal — placement is the
+# model's job, not the prompt's.
+ADDIT_NEGATIVE_PROMPT = "low quality, blurry, distorted, deformed"
+
+# Optional example prompt/subject pairs for the demo/eval (free-placement).
+ADDIT_EXAMPLE_PROMPTS = [
+    ("a photo of a city street with a pedestrian walking", "pedestrian"),
+    ("a city sidewalk with a person standing near the curb", "person"),
+    ("an urban road with two pedestrians crossing", "pedestrians"),
+]
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 6. Output & Debug
+# 5. Output & debug
 # ═══════════════════════════════════════════════════════════════════════════
-ADDIT_OUTPUT_DIR       = Path("/kaggle/working/addit_citypersons")
-ADDIT_DEBUG_DIR        = Path("/kaggle/working/addit_debug")
-ADDIT_SAVE_DEBUG       = True
-ADDIT_DEBUG_MAX_ITEMS  = 10
-ADDIT_SAVE_STEP_VIS    = False   # save latent at every N steps (expensive)
-ADDIT_STEP_VIS_INTERVAL = 5
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 7. Retry & Validation (reuse parent thresholds, override here if needed)
-# ═══════════════════════════════════════════════════════════════════════════
-ADDIT_MAX_RETRIES = 3
-ADDIT_RETRY_SEED_STEP = 9973     # seed += this per retry
+ADDIT_OUTPUT_DIR = Path("/kaggle/working/addit_faithful")
+ADDIT_DEBUG_DIR = Path("/kaggle/working/addit_debug")
+ADDIT_SAVE_DEBUG = True
+ADDIT_DEBUG_MAX_ITEMS = 20
+ADDIT_SAVE_MASK_VIS = True                    # save the attention map + refined mask
