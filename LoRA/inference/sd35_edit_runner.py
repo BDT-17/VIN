@@ -60,6 +60,16 @@ class SD35EditRunner:
         self.pipe.load_lora_weights(str(self.adapter_dir),
                                     weight_name="pytorch_lora_weights.safetensors")
 
+        # load_lora_weights pulls the 3 text encoders (incl. T5-XXL ~9GB) onto the
+        # GPU, which fills a 16GB T4 before precompute_embeds even runs. Force the
+        # whole pipeline back to CPU so precompute_embeds starts from an empty GPU
+        # and can run its plan: encoders -> GPU -> encode -> drop -> transformer+VAE.
+        self.pipe.to("cpu")
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         # input adapter (the 33->16 edit conv) — REQUIRED
         ia_file = self.adapter_dir / "input_adapter.pt"
         if not ia_file.exists():
@@ -85,13 +95,23 @@ class SD35EditRunner:
         for e in (self.pipe.text_encoder, self.pipe.text_encoder_2, self.pipe.text_encoder_3):
             if e is not None:
                 e.to(device)
+        e = None                                   # drop the loop ref to the last encoder
         for p in dict.fromkeys(prompts):           # de-dup, preserve order
             pe, _, pooled, _ = self.pipe.encode_prompt(
                 p, prompt_2=p, prompt_3=p, device=device,
                 num_images_per_prompt=1, do_classifier_free_guidance=False)
             self._embeds[p] = (pe.to("cpu"), pooled.to("cpu"))
-        # free the encoders, then make room-clearing explicit
-        self.pipe.text_encoder = self.pipe.text_encoder_2 = self.pipe.text_encoder_3 = None
+            del pe, pooled
+        # Free the encoders for real. Just setting the attrs to None and calling
+        # empty_cache() leaves ~9GB (T5-XXL) resident: the loop var `e` and the
+        # pipeline still ref them, so the CUDA storage is not released and the VAE
+        # encode below OOMs. Move each encoder back to CPU, del it, THEN clear.
+        for attr in ("text_encoder", "text_encoder_2", "text_encoder_3"):
+            enc = getattr(self.pipe, attr, None)
+            if enc is not None:
+                enc.to("cpu")
+            setattr(self.pipe, attr, None)
+            del enc
         import gc; gc.collect(); torch.cuda.empty_cache()
         self.pipe.transformer.to(device); self.pipe.vae.to(device)
         self._encoders_dropped = True
