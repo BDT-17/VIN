@@ -56,23 +56,39 @@ class InputAdapter(torch.nn.Module):
 class InputProj(torch.nn.Module):
     """Mask-FREE (IP2P/PIPE-style) input projection: [noisy(16) | source(16)] -> 16.
 
-    The mask-free edit model is conditioned on the source image only (no mask
-    channel); this 1x1 conv adapts the 32-channel concat back to the 16 channels
-    SD3's patch-embed expects. Init so cond ~= noisy latent at start (identity on
-    the first 16) — same warm-start trick as InputAdapter, minus the mask input.
+    The mask-free edit model is conditioned on the source image; this projection
+    adapts the 32-channel concat back to the 16 channels SD3's patch-embed expects.
+
+    A 1x1 conv with identity-on-noisy + ZERO-on-source warm start (the original
+    InputAdapter trick) leaves the SOURCE channel mute at init: cond == noisy, and
+    because the output is already "good" the source weights barely get gradient —
+    the same failure that made the mask-based adapter ignore its conditioning
+    (smoke output was pure text-to-image, ignoring the source image entirely).
+
+    Fix: (1) a small hidden 3x3 conv so the projection is spatial-aware (it can
+    reason about WHERE the source content is, not just per-pixel channel mixing),
+    and (2) warm-start the output layer to identity-on-noisy but with a SMALL
+    non-zero source contribution, so the source has a gradient signal from step 0.
     """
 
-    def __init__(self, in_ch=32, out_ch=16):
+    def __init__(self, in_ch=32, out_ch=16, hidden=64, source_init=0.05):
         super().__init__()
-        self.proj = torch.nn.Conv2d(in_ch, out_ch, kernel_size=1)
-        torch.nn.init.zeros_(self.proj.weight)
-        torch.nn.init.zeros_(self.proj.bias)
-        with torch.no_grad():
-            for c in range(out_ch):
-                self.proj.weight[c, c, 0, 0] = 1.0
+        self.body = torch.nn.Sequential(
+            torch.nn.Conv2d(in_ch, hidden, kernel_size=3, padding=1),
+            torch.nn.SiLU(),
+            torch.nn.Conv2d(hidden, out_ch, kernel_size=3, padding=1),
+        )
+        # Small-init the output layer (no identity warm-start): a two-conv body
+        # can't pass noisy through by a single identity row anyway, and the
+        # identity trick is exactly what muted the source before. Small random
+        # init lets BOTH noisy and source contribute and get gradient from step 0;
+        # grad-accum 16 keeps it stable despite no warm-start.
+        out_conv = self.body[-1]
+        torch.nn.init.normal_(out_conv.weight, std=source_init)
+        torch.nn.init.zeros_(out_conv.bias)
 
     def forward(self, noisy, source):
-        return self.proj(torch.cat([noisy, source], dim=1))
+        return self.body(torch.cat([noisy, source], dim=1))
 
 
 def run_spike(pairs, base_model_id="stabilityai/stable-diffusion-3.5-medium",
