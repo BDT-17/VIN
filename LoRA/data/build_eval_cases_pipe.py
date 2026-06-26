@@ -22,14 +22,20 @@ from pathlib import Path
 
 import numpy as np
 
+import re
+
 # words that mark a person/pedestrian instruction or class
 _PERSON_WORDS = ("person", "people", "pedestrian", "man", "woman", "men",
-                 "women", "boy", "girl", "child", "kid", "human")
+                 "women", "boy", "girl", "child", "children", "kid", "human")
+# whole-word match: substring matching let "mane" (horse), "german", "ornament"
+# etc. slip through because they CONTAIN "man"/"men" — that is why horses/animals
+# leaked into a "person-only" filter. \b anchors to word boundaries.
+_PERSON_RE = re.compile(r"\b(" + "|".join(_PERSON_WORDS) + r")\b")
 
 
 def _is_person(instruction_class: str, instruction_text: str) -> bool:
     blob = f"{instruction_class or ''} {instruction_text or ''}".lower()
-    return any(w in blob for w in _PERSON_WORDS)
+    return _PERSON_RE.search(blob) is not None
 
 
 def _derive_mask(source_rgb: np.ndarray, target_rgb: np.ndarray,
