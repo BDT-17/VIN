@@ -139,6 +139,9 @@ class SD35MaskFreeRunner:
         self.scheduler.set_timesteps(num_inference_steps, device=device)
         for t in self.scheduler.timesteps:
             timestep = t.expand(latents.shape[0])
+            # Three CFG forwards run SEQUENTIALLY and we free each activation set
+            # before the next so the T4 only ever holds one transformer pass worth
+            # of activations (three live at once can OOM a 16GB T4).
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 e_uncond = predict(latents, zero_lat, pe_empty, pooled_empty)
                 e_image = predict(latents, source_lat, pe_empty, pooled_empty)
@@ -146,6 +149,7 @@ class SD35MaskFreeRunner:
                 v = (e_uncond
                      + s_image * (e_image - e_uncond)
                      + s_text * (e_full - e_image))
+            del e_uncond, e_image, e_full
             latents = self.scheduler.step(v, t, latents, return_dict=False)[0]
 
         lat = (latents / self.pipe.vae.config.scaling_factor) + self.pipe.vae.config.shift_factor

@@ -267,4 +267,11 @@ def run_training(work_dir, base_model_id=None, hf_token=None, train_config_path=
     print(f"  LoRA:        {adapter_file}")
     print(f"  input_proj:  {out/'input_proj.pt'}")
     print(f"  loss {provenance['loss_first25_mean']} -> {provenance['loss_last25_mean']}")
+
+    # Release the model from GPU before returning so a same-session eval subprocess
+    # (all-in-one notebook) isn't starved of VRAM by this kernel's leftover ~6GB.
+    del transformer, vae, input_proj, opt, lora_params, pipe
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     return {"run_dir": run_dir, "adapter_dir": out, "provenance": provenance}
