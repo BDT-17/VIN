@@ -100,14 +100,21 @@ the full end-to-end run are verified (background preserved, edit only in the mas
 - `LoRA/inference/` — `sd35_edit_runner` (denoise loop + hard-restore),
   `inpaint_metrics`, `report`
 - `LoRA/data/` — PIPE eval builder + the older ETL/release helpers
-- `LoRA/notebooks/` — **`sd35_edit_all_in_one.ipynb`** (train → test → contact
-  sheet in one batch-safe session); `00_spike`, `05_train`, `06_test`
+- `LoRA/notebooks/` — flow-prefixed: **`maskfree_01_all_in_one.ipynb`** /
+  **`maskfree_02_augment.ipynb`** (current focus); `maskbased_01..05` (the older
+  mask + hard-restore edit flow); `concept_lora_01..02`, `data_01`, `spike_*`
 - `LoRA/vendor/diffusers/<commit>/` — pinned training script
 
-**Run on Kaggle:** open `sd35_edit_all_in_one.ipynb`, set GPU + SD3.5 access
+> **Pivot 2026-06-26:** the active flow is now **mask-FREE** (IP2P/PIPE-style:
+> condition on source image + instruction, model decides where/scale, no mask,
+> no hard-restore). The mask-based flow (`maskbased_*`) is kept for comparison —
+> it produced people that did not fit the mask, traced to a near-mute mask channel
+> and effective-batch-1 training vs the PIPE paper's 4096.
+
+**Run on Kaggle:** open `maskfree_01_all_in_one.ipynb`, set GPU + SD3.5 access
 (HF_TOKEN secret or a mounted model dataset), pick `SMOKE` true/false, then
-**Save Version → Save & Run All**. Eval reference = the real PIPE `target_img`,
-so background metrics are meaningful; component metrics only, no fused score.
+**Save Version → Save & Run All**. Then `maskfree_02_augment.ipynb` loads the
+trained adapter and adds people to real images from any sources.yaml dataset.
 Training data is general PIPE person pairs (diverse scenes), not street-only.
 
 See `LoRA/README_LORA.md` for the full per-stage contract.

@@ -5,15 +5,15 @@
 > Base SD3.5 already makes good pedestrians, so a plain concept LoRA adds little;
 > the value is in *edit* behavior learned from before/after pairs (PIPE). SD3.5
 > has no official inpaint/edit trainer, so we hand-rolled one. A single-pair
-> overfit spike (notebook `00`, collapse_ratio 0.18) confirmed the edit
+> overfit spike (`spike_maskbased_conditioning.ipynb`, collapse_ratio 0.18) confirmed the edit
 > conditioning is wired correctly.
 >
-> - **Train** (D1): notebook `05` / `train/train_inpaint_edit.py`. Smoke verified
+> - **Train** (D1): `maskbased_01_train.ipynb` / `train/train_inpaint_edit.py`. Smoke verified
 >   (loss 0.34 → 0.22). Exports `pytorch_lora_weights.safetensors` **and**
 >   `input_adapter.pt` (the 33→16 edit conv) — BOTH required at inference.
 > - **Inference + eval** (D2): `inference/sd35_edit_runner.py` runs the full
 >   denoise loop, reconstructing the edit conditioning each step, then
->   hard-restores the background; notebook `06` evaluates on the PIPE golden set
+>   hard-restores the background; `maskbased_02_test_pipe.ipynb` evaluates on the PIPE golden set
 >   and emits a contact sheet for manual check.
 >
 > The concept-LoRA + reconstruction-eval pieces below remain for comparison /
@@ -49,7 +49,7 @@ LoRA/
     parsers/{yolo,mot,classification}.py
   train/                    # train_sd35_lora, export_artifacts, provenance
   inference/                # sd35_inpaint_runner, inpaint_metrics, report
-  notebooks/                # 01_build_lora_release, 02_train_sd35_lora, 03_test_sd35_inpaint_lora
+  notebooks/                # flow-prefixed: maskfree_* (active), maskbased_*, concept_lora_*, data_*, spike_*
   tests/
   vendor/diffusers/<commit>/train_dreambooth_lora_sd3.py   # pinned trainer
 ```
@@ -58,7 +58,7 @@ Notebooks hold **no** ETL/train/eval logic — they only call `LoRA.data`,
 `LoRA.train`, `LoRA.inference`. Import style is clean package imports
 (`from LoRA.data.pipeline import run_full_etl`); add the repo root to `sys.path`.
 
-## A. Data ETL (`notebooks/01_build_lora_release.ipynb`)
+## A. Data ETL (`notebooks/data_01_build_lora_release.ipynb`)
 
 ```text
 00 ingest -> 01 normalize -> 02 dedupe/group -> 03 build eval cases
@@ -83,7 +83,7 @@ trigger, empty train/val, unreadable crop, duplicate-cluster or group overlap
 between train/val, or any eval image/group leaking into the release. On success
 `release.json: dataset_status` flips to `validated`.
 
-## B. Train (`notebooks/02_train_sd35_lora.ipynb`)
+## B. Train (`notebooks/concept_lora_01_train.ipynb`)
 
 ```text
 00 git SHA -> 01 GPU/deps -> 02 vendor pinned trainer -> 03 verify validated release
@@ -102,7 +102,7 @@ Run output (`models/<model_name>/run_NNN/`): `adapter/pytorch_lora_weights.safet
 `gpu_info.json`, `validation_prompts.json`. Adapter selection uses validation
 prompts + `lora_val`; the frozen eval is run once after config is locked.
 
-## C. Inpaint test (`notebooks/03_test_sd35_inpaint_lora.ipynb`)
+## C. Inpaint test (`notebooks/concept_lora_02_test_inpaint.ipynb`)
 
 **Golden eval set — PIPE.** The eval cases come from
 [`paint-by-inpaint/PIPE`](https://huggingface.co/datasets/paint-by-inpaint/PIPE),
@@ -141,7 +141,7 @@ score):
 `metrics_summary.json`, and `paired_comparison.csv` (per-metric `delta_*` =
 LoRA − baseline). The inpaint stack is pinned to `diffusers==0.35.2` /
 `transformers==4.46.3` / `accelerate==1.11.0` (see `configs/inpaint_eval.yaml`
-and notebook 03).
+and `concept_lora_02_test_inpaint.ipynb`).
 
 ## Trigger token
 
