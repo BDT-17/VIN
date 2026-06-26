@@ -183,7 +183,7 @@ def run_training(work_dir, base_model_id=None, hf_token=None, train_config_path=
         target = to_t(it["target"]); source = to_t(it["source"])
         with torch.no_grad():
             target_lat = _vae_encode(vae, target)
-            source_lat = _vae_encode(vae, source)            # NO mask — full source
+            source_lat = _vae_encode(vae, source, mode=True)  # NO mask — full source (PIPE: cond uses .mode())
             # CFG dropout (paper §4): independently drop text / image at p each.
             drop_text = torch.rand(1, generator=rng).item() < cfg_drop
             drop_image = torch.rand(1, generator=rng).item() < cfg_drop

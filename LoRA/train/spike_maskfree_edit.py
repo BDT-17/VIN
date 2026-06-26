@@ -91,7 +91,7 @@ def run_maskfree_spike(base_model_id="stabilityai/stable-diffusion-3.5-medium",
 
     with torch.no_grad():
         target_lat = _vae_encode(vae, to_t(item["target"]))
-        source_lat = _vae_encode(vae, to_t(item["source"]))
+        source_lat = _vae_encode(vae, to_t(item["source"]), mode=True)  # PIPE: cond uses .mode()
         # fixed noise + fixed timestep -> pure memorization signal
         torch.manual_seed(0)
         noise = torch.randn(target_lat.shape, device=device, dtype=target_lat.dtype)

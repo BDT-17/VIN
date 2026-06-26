@@ -138,7 +138,7 @@ class SD35EditRunner:
             return t.unsqueeze(0).to(device, dtype=dtype)
 
         src_t = to_t(src, "RGB"); mask_t = to_t(msk, "L")
-        source_lat = _vae_encode(self.pipe.vae, src_t * (1 - mask_t))
+        source_lat = _vae_encode(self.pipe.vae, src_t * (1 - mask_t), mode=True)  # PIPE: cond image uses .mode()
         mask_lat = F.interpolate(mask_t, size=source_lat.shape[-2:])
 
         gen = torch.Generator(device=device).manual_seed(int(seed))

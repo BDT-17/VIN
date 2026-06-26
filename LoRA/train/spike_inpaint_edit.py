@@ -30,8 +30,13 @@ import torch
 import torch.nn.functional as F
 
 
-def _vae_encode(vae, images):
-    lat = vae.encode(images).latent_dist.sample()
+def _vae_encode(vae, images, mode=False):
+    """Encode to SD3 latent space. mode=True uses the distribution MODE
+    (deterministic) — PIPE/IP2P encodes the CONDITIONING (source) image with
+    .mode() so the source signal carries no sampling noise; the noisy-target
+    latent keeps the default .sample()."""
+    dist = vae.encode(images).latent_dist
+    lat = dist.mode() if mode else dist.sample()
     return (lat - vae.config.shift_factor) * vae.config.scaling_factor
 
 

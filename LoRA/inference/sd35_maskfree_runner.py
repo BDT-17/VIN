@@ -123,7 +123,7 @@ class SD35MaskFreeRunner:
 
         a = np.asarray(src, dtype=np.float32) / 255.0
         src_t = (torch.from_numpy(a).permute(2, 0, 1) * 2 - 1).unsqueeze(0).to(device, dtype=dtype)
-        source_lat = _vae_encode(self.pipe.vae, src_t)
+        source_lat = _vae_encode(self.pipe.vae, src_t, mode=True)  # PIPE: cond uses .mode()
         zero_lat = torch.zeros_like(source_lat)              # dropped-image condition
 
         gen = torch.Generator(device=device).manual_seed(int(seed))

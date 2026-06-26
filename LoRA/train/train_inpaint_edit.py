@@ -170,7 +170,7 @@ def run_training(work_dir, base_model_id=None, hf_token=None, train_config_path=
         target = to_t(it["target"]); source = to_t(it["source"]); mask = to_t(it["mask"], "L")
         with torch.no_grad():
             target_lat = _vae_encode(vae, target)
-            source_lat = _vae_encode(vae, source * (1 - mask))
+            source_lat = _vae_encode(vae, source * (1 - mask), mode=True)  # PIPE: cond image uses .mode()
             mask_lat = F.interpolate(mask, size=target_lat.shape[-2:])
             _emb = torch.load(emb_dir / f"{prompt_to_id[it['prompt']]}.pt", weights_only=True)
             prompt_embeds, pooled = _emb["pe"].to(device), _emb["pooled"].to(device)
