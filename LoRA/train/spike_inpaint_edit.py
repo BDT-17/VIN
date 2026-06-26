@@ -53,6 +53,28 @@ class InputAdapter(torch.nn.Module):
         return self.proj(x)
 
 
+class InputProj(torch.nn.Module):
+    """Mask-FREE (IP2P/PIPE-style) input projection: [noisy(16) | source(16)] -> 16.
+
+    The mask-free edit model is conditioned on the source image only (no mask
+    channel); this 1x1 conv adapts the 32-channel concat back to the 16 channels
+    SD3's patch-embed expects. Init so cond ~= noisy latent at start (identity on
+    the first 16) — same warm-start trick as InputAdapter, minus the mask input.
+    """
+
+    def __init__(self, in_ch=32, out_ch=16):
+        super().__init__()
+        self.proj = torch.nn.Conv2d(in_ch, out_ch, kernel_size=1)
+        torch.nn.init.zeros_(self.proj.weight)
+        torch.nn.init.zeros_(self.proj.bias)
+        with torch.no_grad():
+            for c in range(out_ch):
+                self.proj.weight[c, c, 0, 0] = 1.0
+
+    def forward(self, noisy, source):
+        return self.proj(torch.cat([noisy, source], dim=1))
+
+
 def run_spike(pairs, base_model_id="stabilityai/stable-diffusion-3.5-medium",
               steps=50, rank=8, lr=1e-4, resolution=512, device="cuda",
               out_dir="/kaggle/working/spike_inpaint_edit", hf_token=None,
