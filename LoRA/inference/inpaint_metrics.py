@@ -140,3 +140,44 @@ def compute_case_metrics(reference_path, result_path, mask_path, expected_bbox_x
     m.update(person_metrics(result_path, mask_path, expected_bbox_xyxy, detector, conf_thr))
     m.update(edge_seam_score(reference_path, result_path, mask_path))
     return m
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cross-flow shared metrics (V5 / LoRA / ADD-IT share this schema).
+# These are ADDITIVE — the LoRA-native metrics above are unchanged.  The shared
+# core lives at the repo root in ``shared_metrics.py``; we expose a thin bridge
+# so a LoRA eval can also emit the comparable schema (person/inclusion/scale/bg).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_shared_case_metrics(reference_path, result_path, source_path=None,
+                                 mask_path=None, expected_bbox_xyxy=None,
+                                 detector=None, dilate_px=8, conf_thr=0.25) -> Dict:
+    """Emit the cross-flow shared metric schema for one LoRA case.
+
+    For the PIPE inpaint flow the background reference is the PIPE *target*
+    (its background equals the source), and the object region is the inpaint
+    ``mask_path``.  ``source_path`` (object-erased input) enables Inclusion.
+    """
+    import sys
+    from pathlib import Path as _Path
+    sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))  # repo root
+    from shared_metrics import compute_shared_metrics  # noqa: E402
+
+    exp_h = None
+    if expected_bbox_xyxy:
+        exp_h = float(expected_bbox_xyxy[3] - expected_bbox_xyxy[1])
+
+    def _det(img):
+        return detector(img) if detector is not None else []
+
+    return compute_shared_metrics(
+        result_image=str(result_path),
+        source_image=str(source_path) if source_path is not None else None,
+        reference_image=str(reference_path),
+        detector=(_det if detector is not None else None),
+        expected_height=exp_h,
+        object_mask=str(mask_path) if mask_path is not None else None,
+        conf_thr=conf_thr,
+        person_class=0,
+        dilate_px=dilate_px,
+    )

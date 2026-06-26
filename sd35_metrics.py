@@ -350,6 +350,38 @@ def summarize_manifest_metrics(rows, reject_histogram=None, detection_comparison
     return summary
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Cross-flow shared metrics (V5 / LoRA / ADD-IT share this schema).
+# ADDITIVE — the V5 affordance scoring above and the manifest schema are
+# unchanged.  This bridge lets a V5 run ALSO emit the comparable cross-flow
+# schema (person/inclusion/scale/background) so V5 can be compared head-to-head
+# with the LoRA and ADD-IT flows.  Core lives in repo-root ``shared_metrics.py``.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_shared_case_metrics(result_image, source_image=None, detector=None,
+                                expected_height=None, insert_bbox=None,
+                                conf_thr=0.25, dilate_px=8):
+    """Emit the cross-flow shared metric schema for one V5 result.
+
+    For V5 the background reference is the original source image (V5 composites
+    the object back onto the untouched source background), and the object region
+    is the planned ``insert_bbox`` when available, else the detected box.
+    ``detector`` is an injected ``detector(img)->[{bbox_xyxy,conf,cls}]``.
+    """
+    from shared_metrics import compute_shared_metrics
+    return compute_shared_metrics(
+        result_image=result_image,
+        source_image=source_image,
+        reference_image=source_image,        # source is V5's background truth
+        detector=detector,
+        expected_height=expected_height,
+        object_bbox=insert_bbox,
+        conf_thr=conf_thr,
+        person_class=0,
+        dilate_px=dilate_px,
+    )
+
+
 def write_metrics_summary(rows, reject_histogram=None, output_dir=METRICS_DIR, detection_comparison=None):
     """Write metrics_summary.json and metrics_summary.csv for a batch run."""
     output_dir = Path(output_dir)
