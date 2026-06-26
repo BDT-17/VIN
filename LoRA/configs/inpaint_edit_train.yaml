@@ -15,6 +15,14 @@ checkpointing_steps: 500
 seed: 42
 grad_clip_norm: 1.0
 
+# training fixes (2026-06-26): the 3000-step run had flat loss (0.27->0.27) and
+# produced people that didn't fit the mask. Root cause was effective batch 1 and a
+# loss that spent capacity on the soon-discarded background, not the conditioning
+# (the spike PASSed at collapse_ratio 0.18, so the 33->16 conditioning IS wired).
+grad_accum_steps: 16     # effective batch 16 (was 1) — fixes the noisy/flat loss
+mask_loss_weight: 5.0    # weight in-mask error 5x: hard-restore discards out-of-mask,
+                         # so the model should make the PERSON good, not the background
+
 # data (PIPE train split, person-only, mask derived from |target-source|)
 pipe_split: train
 person_only: true

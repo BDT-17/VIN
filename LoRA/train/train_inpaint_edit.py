@@ -68,6 +68,8 @@ def run_training(work_dir, base_model_id=None, hf_token=None, train_config_path=
         cfg["num_train_samples"] = int(num_train_samples)
     base_model_id = base_model_id or cfg["base_model_id"]
     resolution = int(cfg.get("resolution", 512))
+    grad_accum = int(cfg.get("grad_accum_steps", 16))
+    mask_loss_weight = float(cfg.get("mask_loss_weight", 5.0))
 
     from diffusers import StableDiffusion3Pipeline, FlowMatchEulerDiscreteScheduler
     from diffusers.training_utils import (compute_density_for_timestep_sampling,
@@ -161,6 +163,7 @@ def run_training(work_dir, base_model_id=None, hf_token=None, train_config_path=
 
     losses = []
     transformer.train()
+    opt.zero_grad()
     for step in range(steps):
         i = step % len(pairs)
         it = pairs[i]
@@ -190,23 +193,35 @@ def run_training(work_dir, base_model_id=None, hf_token=None, train_config_path=
         weighting = compute_loss_weighting_for_sd3(
             weighting_scheme=cfg.get("weighting_scheme", "logit_normal"), sigmas=sigma)
         target_v = noise - target_lat
-        loss = (weighting.float() * (pred.float() - target_v.float()) ** 2).mean()
+        # Mask-weighted loss: the person lives INSIDE the mask, and hard-restore
+        # discards everything the model predicts outside it, so weight the in-mask
+        # error higher (the model should spend its capacity making the person good,
+        # not the about-to-be-discarded background). pix_w = 1 + (W-1)*mask_lat.
+        pix_w = 1.0 + (mask_loss_weight - 1.0) * mask_lat.float()
+        err = weighting.float() * (pred.float() - target_v.float()) ** 2
+        loss = (pix_w * err).sum() / pix_w.sum() / err.shape[1]
 
-        opt.zero_grad(); loss.backward()
-        torch.nn.utils.clip_grad_norm_(lora_params + list(input_adapter.parameters()), clip)
-        opt.step()
-
+        (loss / grad_accum).backward()       # accumulate over grad_accum steps
         lv = loss.item()
         if not math.isfinite(lv):
             mf.close()
             raise RuntimeError(f"Training diverged: non-finite loss at step {step}")
         losses.append(lv)
         mf.write(json.dumps({"step": step, "loss": round(lv, 6)}) + "\n"); mf.flush()
+
+        if (step + 1) % grad_accum == 0:
+            torch.nn.utils.clip_grad_norm_(lora_params + list(input_adapter.parameters()), clip)
+            opt.step(); opt.zero_grad()
+
         if step % 25 == 0:
             print(f"  step {step:4d}/{steps}  loss {lv:.4f}")
         if ckpt_every and (step + 1) % ckpt_every == 0 and (step + 1) < steps:
             _save_artifacts(run_dir, transformer, input_adapter, tag=f"checkpoints/checkpoint-{step+1}")
             print(f"  [ckpt] checkpoint-{step+1}")
+    # flush remaining accumulated gradient
+    if steps % grad_accum != 0:
+        torch.nn.utils.clip_grad_norm_(lora_params + list(input_adapter.parameters()), clip)
+        opt.step(); opt.zero_grad()
     mf.close()
     # drop the on-disk embed cache (not part of the artifact)
     import shutil as _sh
@@ -221,6 +236,8 @@ def run_training(work_dir, base_model_id=None, hf_token=None, train_config_path=
         "trigger_token": "<vin_ped>",
         "rank": cfg["rank"], "learning_rate": cfg["learning_rate"],
         "max_train_steps": steps, "num_train_samples": len(pairs),
+        "grad_accum_steps": grad_accum, "effective_batch": grad_accum,
+        "mask_loss_weight": mask_loss_weight,
         "weighting_scheme": cfg.get("weighting_scheme"),
         "lora_sha256": sha256_file(adapter_file) if adapter_file.exists() else "",
         "input_adapter_sha256": sha256_file(out / "input_adapter.pt"),
@@ -235,4 +252,10 @@ def run_training(work_dir, base_model_id=None, hf_token=None, train_config_path=
     print(f"  LoRA:          {adapter_file}")
     print(f"  input_adapter: {out/'input_adapter.pt'}")
     print(f"  loss {provenance['loss_first25_mean']} -> {provenance['loss_last25_mean']}")
+
+    # Release GPU before returning so a same-session eval subprocess isn't starved.
+    del transformer, vae, input_adapter, opt, lora_params, pipe
+    import gc; gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     return {"run_dir": run_dir, "adapter_dir": out, "provenance": provenance}
