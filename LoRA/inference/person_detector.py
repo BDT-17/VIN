@@ -78,3 +78,68 @@ def maybe_load_person_detector(
     except Exception as e:  # noqa: BLE001 - eval should not crash on detector
         print(f"[detector] disabled ({e}); person metrics will be 0/None")
         return None
+
+
+def load_person_segmenter(
+    weights: str = "yolov8n-seg.pt",
+    device: Optional[str] = None,
+    imgsz: int = 640,
+    conf_thr: float = 0.25,
+) -> Callable:
+    """Return a person *segmenter* callable for the segment-and-paste pipeline.
+
+    Unlike the detector (bbox only), this returns a per-person binary mask at the
+    image's native resolution::
+
+        segment(image) -> [{"mask": np.bool_ HxW, "bbox_xyxy": [..], "conf": float}, ...]
+
+    sorted by descending confidence. ``image`` may be a path or a PIL.Image (the
+    composite step works in-memory, so it passes the generated PIL frame directly
+    without a disk round-trip). Person == COCO class 0.
+    """
+    try:
+        from ultralytics import YOLO
+    except ImportError as e:  # pragma: no cover - environment dependent
+        raise RuntimeError(
+            "ultralytics is required for person segmentation. Install it "
+            "(`pip install ultralytics`)."
+        ) from e
+
+    import numpy as np
+
+    model = YOLO(weights)
+    if device is not None:
+        model.to(device)
+
+    def segment(image) -> List[Dict]:
+        res = model.predict(source=image, imgsz=imgsz, verbose=False, conf=conf_thr)
+        out: List[Dict] = []
+        for r in res:
+            boxes = getattr(r, "boxes", None)
+            masks = getattr(r, "masks", None)
+            if boxes is None or masks is None:
+                continue
+            # masks.data is (N, mh, mw) at the model's mask resolution; r.orig_shape
+            # is the source (H, W). Resize each mask up to native so paste aligns.
+            H, W = r.orig_shape
+            md = masks.data.cpu().numpy()  # (N, mh, mw) float in [0,1]
+            for i, b in enumerate(boxes):
+                if int(b.cls[0]) != PERSON_CLASS:
+                    continue
+                m = md[i]
+                if m.shape != (H, W):
+                    from PIL import Image as _Image
+                    m = np.asarray(
+                        _Image.fromarray((m * 255).astype("uint8")).resize((W, H)),
+                        dtype=np.float32,
+                    ) / 255.0
+                x1, y1, x2, y2 = (float(v) for v in b.xyxy[0].tolist())
+                out.append({
+                    "mask": m > 0.5,
+                    "bbox_xyxy": [x1, y1, x2, y2],
+                    "conf": float(b.conf[0]),
+                })
+        out.sort(key=lambda d: d["conf"], reverse=True)
+        return out
+
+    return segment
