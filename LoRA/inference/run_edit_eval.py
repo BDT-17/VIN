@@ -30,6 +30,10 @@ def main():
     ap.add_argument("--limit", type=int, default=None, help="cap number of eval cases")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--hf-token", default=None)
+    ap.add_argument("--detector-weights", default="yolov8n.pt",
+                    help="YOLO weights for person metrics; on Kaggle point at a dataset mount")
+    ap.add_argument("--no-detector", action="store_true",
+                    help="skip person metrics (background/seam only)")
     args = ap.parse_args()
 
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
@@ -54,6 +58,13 @@ def main():
     assert prov.get("requires_input_adapter")
     print("[eval] adapter loaded")
 
+    detector = None
+    if not args.no_detector:
+        from LoRA.inference.person_detector import maybe_load_person_detector
+        detector = maybe_load_person_detector(weights=args.detector_weights)
+        if detector is not None:
+            print("[eval] person detector loaded")
+
     def case_prompt(c):
         return "a photo of <vin_ped> pedestrian, " + (c["prompt_fields"].get("instruction", "") or "a person")
 
@@ -67,10 +78,11 @@ def main():
         img = runner.edit(src, msk, case_prompt(c), seed=args.seed, num_inference_steps=args.steps)
         p = out / "images" / f"{c['case_id']}.png"; img.save(p)
         m = compute_case_metrics(eval_dir / c["reference_path"], p, eval_dir / c["mask_path"],
-                                 c["expected_bbox_xyxy"], detector=None)
+                                 c["expected_bbox_xyxy"], detector=detector)
         m["case_id"] = c["case_id"]; rows.append(m)
         print(f"[eval] {i+1}/{len(cases)} {c['case_id']}  {time.time()-te:.1f}s  "
-              f"inside_mask={m.get('person_inside_mask_ratio')}", flush=True)
+              f"det={m.get('person_detected')} inside_mask={m.get('person_inside_mask_ratio')} "
+              f"scale={m.get('scale_ratio')}", flush=True)
     print(f"[eval] generated {len(rows)} edits")
 
     if rows:
