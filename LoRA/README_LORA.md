@@ -1,55 +1,57 @@
 # LoRA flow
 
-> **Active direction — inpaint-EDIT LoRA.** The goal is a model that adds an
-> object while preserving 100% of the background and matching the photo's vibe.
-> Base SD3.5 already makes good pedestrians, so a plain concept LoRA adds little;
-> the value is in *edit* behavior learned from before/after pairs (PIPE). SD3.5
-> has no official inpaint/edit trainer, so we hand-rolled one. A single-pair
-> overfit spike (`spike_maskbased_conditioning.ipynb`, collapse_ratio 0.18) confirmed the edit
-> conditioning is wired correctly.
+> **Active direction — mask-free EDIT LoRA + segment-and-paste.** The goal is a
+> model that adds a person to a scene while preserving 100% of the original
+> background and matching the photo's vibe. Base SD3.5 already makes good
+> pedestrians, so a plain concept LoRA adds little; the value is in *edit*
+> behaviour learned from before/after pairs (PIPE).
 >
-> - **Train** (D1): `maskbased_01_train.ipynb` / `train/train_inpaint_edit.py`. Smoke verified
->   (loss 0.34 → 0.22). Exports `pytorch_lora_weights.safetensors` **and**
->   `input_adapter.pt` (the 33→16 edit conv) — BOTH required at inference.
-> - **Inference + eval** (D2): `inference/sd35_edit_runner.py` runs the full
->   denoise loop, reconstructing the edit conditioning each step, then
->   hard-restores the background; `maskbased_02_test_pipe.ipynb` evaluates on the PIPE golden set
->   and emits a contact sheet for manual check.
+> The pipeline (2026-06 pivot):
+> 1. **Generate** — a mask-free LoRA (+ `input_proj.pt`) conditioned on the
+>    source image + a plain "add a person" instruction generates a FULL image
+>    that adds a person fitting the scene. No mask, no background preservation at
+>    this stage — the model decides where/scale/pose. (`train/train_maskfree_edit.py`,
+>    `inference/sd35_maskfree_runner.py`.)
+> 2. **Segment** — YOLOv8-seg cuts the generated person out
+>    (`inference/person_detector.py::load_person_segmenter`).
+> 3. **Paste** — the segmented person is composited back onto the ORIGINAL
+>    background at the same coordinates, feathered + colour-matched so it isn't a
+>    sticker (`inference/segment_paste.py`). Background outside the person is
+>    byte-exact by construction (composite, not hard-restore).
 >
-> The concept-LoRA + reconstruction-eval pieces below remain for comparison /
-> the detector-utility track, but the edit flow is the headline.
-
-Two independent sub-flows, no V5 copy:
+> A single-pair overfit spike (`spike_maskfree_conditioning.ipynb`) confirmed the
+> mask-free 32→16 `input_proj` conditioning is wired correctly.
 
 ```text
 A. Data ETL + Train
-   raw datasets -> LoRA release -> train adapter -> model artifacts
+   raw datasets / PIPE pairs -> train mask-free adapter -> model artifacts
+       (pytorch_lora_weights.safetensors + input_proj.pt)
 
-B. SD3.5 Inpaint Test
-   frozen test images + masks
-   -> SD3.5 inpaint baseline (B0)
-   -> SD3.5 inpaint + LoRA   (B1)
-   -> paired metrics + report
+B. Generate -> Segment -> Paste (test / augment)
+   original image
+   -> mask-free generate (full image, person added freely)
+   -> YOLOv8-seg the person
+   -> paste onto the original background (feather + colour-match)
 ```
 
-There is **no** scale correction, semantic placement, object-only composite,
-harmonization, or autotune here. The inpaint test calls raw SD3.5 inpaint; the
-only difference between B0 and B1 is the trigger token in the prompt.
+There is **no** scale correction, semantic placement, harmonization network, or
+autotune here. Background preservation is achieved by the segment-and-paste
+composite, not by a learned objective.
 
 ## Layout
 
 ```text
 LoRA/
   configs/
-    sources.yaml            # sources, quality thresholds, split + eval ratios
-    prompt_templates.yaml   # trigger token + caption / validation / inpaint prompts
-    lora_train.yaml         # training hyperparameters + pinned trainer path
-    inpaint_eval.yaml       # baseline-vs-LoRA eval config
-  data/                     # ETL: ingest -> ... -> export -> validate + build_eval_cases
+    sources.yaml             # sources, quality thresholds, split + eval ratios
+    prompt_templates.yaml    # trigger token + caption / validation prompts
+    maskfree_edit_train.yaml # mask-free EDIT training hyperparameters
+    inpaint_eval.yaml        # PIPE eval config
+  data/                      # ETL: ingest -> ... -> export -> validate; build_eval_cases_pipe
     parsers/{yolo,mot,classification}.py
-  train/                    # train_sd35_lora, export_artifacts, provenance
-  inference/                # sd35_inpaint_runner, inpaint_metrics, report
-  notebooks/                # flow-prefixed: maskfree_* (active), maskbased_*, concept_lora_*, data_*, spike_*
+  train/                     # train_maskfree_edit, maskfree_edit_dataset, spike, export_artifacts, provenance
+  inference/                 # sd35_maskfree_runner, person_detector, segment_paste, inpaint_metrics, report
+  notebooks/                 # data_01, maskfree_01 (train), maskfree_03 (segment-paste test), spike_maskfree
   tests/
   vendor/diffusers/<commit>/train_dreambooth_lora_sd3.py   # pinned trainer
 ```
@@ -57,6 +59,15 @@ LoRA/
 Notebooks hold **no** ETL/train/eval logic — they only call `LoRA.data`,
 `LoRA.train`, `LoRA.inference`. Import style is clean package imports
 (`from LoRA.data.pipeline import run_full_etl`); add the repo root to `sys.path`.
+
+### Notebooks
+
+| Notebook | Purpose |
+|---|---|
+| `data_01_build_lora_release.ipynb` | Build the LoRA dataset release via the ETL pipeline. |
+| `maskfree_01_all_in_one.ipynb` | Train the mask-free edit LoRA on PIPE pairs → eval → contact sheet. |
+| `maskfree_03_segment_paste.ipynb` | Load a trained adapter → generate → YOLO-seg → paste into the original. |
+| `spike_maskfree_conditioning.ipynb` | Single-pair overfit spike validating the 32→16 `input_proj` wiring. |
 
 ## A. Data ETL (`notebooks/data_01_build_lora_release.ipynb`)
 
@@ -67,90 +78,64 @@ Notebooks hold **no** ETL/train/eval logic — they only call `LoRA.data`,
 
 - **Sources** (`configs/sources.yaml`): CityPersons (YOLO), MOT17-02 (MOT),
   Human Detection (classification). Per source, `lora_splits` feed the LoRA
-  release and `eval_splits` are frozen for the inpaint test (never train LoRA).
-  CityPersons `train` -> LoRA; CityPersons `valid` -> inpaint eval.
+  release and `eval_splits` are frozen (never train LoRA).
 - **Crops** keep pedestrian + 25% context (no transparent cutouts).
-- **Captions** are per-image and always contain the trigger token `<vin_ped>`;
-  attributes not present in annotations (gender, age, emotion) are never invented.
 - **Split** is group-aware (scene / sequence-window / dedupe cluster) so train
   and val never share a scene.
-- **Eval cases** (`build_eval_cases`) come from the eval-locked splits and are
-  partitioned group-disjoint into `inpaint_eval_v1` (dev) and
-  `final_inpaint_test_v1` (touch once).
 
-`validate_release` hard-fails on: empty trigger token, any caption missing the
-trigger, empty train/val, unreadable crop, duplicate-cluster or group overlap
-between train/val, or any eval image/group leaking into the release. On success
-`release.json: dataset_status` flips to `validated`.
+`validate_release` hard-fails on: empty train/val, unreadable crop,
+duplicate-cluster or group overlap between train/val, or any eval image/group
+leaking into the release.
 
-## B. Train (`notebooks/concept_lora_01_train.ipynb`)
+## B. Mask-free train (`notebooks/maskfree_01_all_in_one.ipynb`)
 
-```text
-00 git SHA -> 01 GPU/deps -> 02 vendor pinned trainer -> 03 verify validated release
--> 04 dry run -> 05 smoke 100 steps -> 06 1000 steps -> 07 zip artifacts
-```
-
-The trainer is pinned under `vendor/diffusers/<commit>/` (see its `VENDOR.md`) —
-never downloaded from `main` per run. The command runs in caption mode but always
-passes `--instance_prompt` (the Diffusers SD3 LoRA script requires it even with
-`--caption_column`). Loss is monitored live and training hard-fails on NaN/Inf.
-
-Run output (`models/<model_name>/run_NNN/`): `adapter/pytorch_lora_weights.safetensors`
-(canonical) + `.pt` (handoff), `checkpoints/`, `training_config.json`,
-`train_command.json`, `training_provenance.json`, `dataset_provenance.json`,
-`adapter_verification.json`, `adapter_sha256.txt`, `pip_freeze.txt`,
-`gpu_info.json`, `validation_prompts.json`. Adapter selection uses validation
-prompts + `lora_val`; the frozen eval is run once after config is locked.
-
-## C. Inpaint test (`notebooks/concept_lora_02_test_inpaint.ipynb`)
-
-**Golden eval set — PIPE.** The eval cases come from
-[`paint-by-inpaint/PIPE`](https://huggingface.co/datasets/paint-by-inpaint/PIPE),
+Trains on **PIPE** ([`paint-by-inpaint/PIPE`](https://huggingface.co/datasets/paint-by-inpaint/PIPE)),
 which provides **real** before/after pairs: `source_img` is the object-erased
-background (inpaint input) and `target_img` is the real photo (ground truth).
-PIPE ships no mask, so `build_eval_cases_pipe.py` derives the object mask from the
-thresholded, dilated `|target − source|` difference. The builder filters to
-person instructions and writes `eval/pipe_eval_v1/{cases.jsonl,images,masks,
-reference}` (`images`=source, `reference`=target). Because the reference is a
-real photo (not another model's output), `outside_mask_*` metrics are meaningful.
-Settings live under `configs/inpaint_eval.yaml: pipe_eval`.
+background and `target_img` is the real photo. PIPE is an object-ADDITION
+dataset, so every pair is an "add object" edit and `Instruction_Class` holds the
+object category. The mask-free loader (`train/maskfree_edit_dataset.py`) filters
+**strictly on `Instruction_Class`** to person classes (`_is_person_class`, whole-word,
+class field only — the free-text caption is never matched, so a non-person class
+whose caption mentions a person does not leak in). No mask is used or fed to the
+model; a `|target − source|` diff is used only to drop no-op pairs.
 
-> The earlier `build_eval_cases.py` (CityPersons valid → mask over the existing
-> person) is a reconstruction proxy and is kept for that flow; PIPE is the real
-> golden set for "add a person to a background".
+The model is conditioned on (source latent, instruction) via the 32→16
+`input_proj`, trained with IP2P-style classifier-free guidance (drop text /
+image / both at small probability). Plain natural-language instructions only —
+the mask-free flow **dropped the `<vin_ped>` trigger token**.
 
-**Background preservation = hard-restore, not learned.** The final task ("add a
-person, keep the background 100%") is achieved at inference, not by training: the
-runner composites `result = input*(1-mask) + generated*mask` (config
-`hard_restore: true`), so the LoRA only fills inside the mask and the background
-outside is preserved byte-for-byte. The LoRA's job is the person quality inside
-the mask; the restore guarantees the background. (PIPE's source/target differ
-only inside the object region, so `outside_mask_mae` vs the target reference
-stays ~0 and effectively verifies the restore + the derived mask.)
+Run output (`models/<model_name>/run_NNN/`):
+`adapter/pytorch_lora_weights.safetensors` + `adapter/input_proj.pt` (BOTH
+required at inference), `training_provenance.json`, `checkpoints/`, etc.
 
-Runs B0 then B1 with **identical** image/mask/prompt-fields/seed/resolution/
-strength/guidance/steps/negative-prompt — only the trigger token differs (B1 also
-attaches the LoRA adapter). Per-case metrics (component metrics only, no fused
-score):
+## C. Generate → segment → paste (`notebooks/maskfree_03_segment_paste.ipynb`)
 
+1. `inference/sd35_maskfree_runner.py` loads base SD3.5 + LoRA + `input_proj.pt`
+   and runs the full denoise loop, reconstructing the edit conditioning each step
+   with two-scale CFG (`s_image` = source adherence, `s_text` = instruction).
+2. `person_detector.load_person_segmenter` (YOLOv8n-seg, COCO class 0) returns a
+   per-person `{mask, bbox, conf}` from the generated frame.
+3. `segment_paste.composite_persons` pastes the person onto the original with a
+   feathered alpha + reinhard colour-match (optional OpenCV Poisson). The
+   background outside the person is preserved byte-exact.
+
+`segment_paste.generate_and_paste` runs all three for one image and returns
+`(composite, generated, info)` so a `original | generated | composite` sheet can
+be built. **Known tradeoff:** the person is lit by the *generated* scene, so a
+paste can look like a sticker — raise `s_image`, increase `color_match`, or
+enable Poisson to mitigate.
+
+## Metrics
+
+`inference/inpaint_metrics.py` (component metrics only, no fused score):
 `outside_mask_mae`, `outside_mask_ssim`, `person_detected`, `person_confidence`,
 `person_inside_mask_ratio`, `expected/detected_height`, `scale_ratio`,
-`edge_seam_score`, `runtime_seconds`, `cuda_peak_mb`.
-
-`report.build_paired_comparison` writes `metrics_per_case.csv`,
-`metrics_summary.json`, and `paired_comparison.csv` (per-metric `delta_*` =
-LoRA − baseline). The inpaint stack is pinned to `diffusers==0.35.2` /
-`transformers==4.46.3` / `accelerate==1.11.0` (see `configs/inpaint_eval.yaml`
-and `concept_lora_02_test_inpaint.ipynb`).
-
-## Trigger token
-
-`<vin_ped>` appears in 100% of train/val captions, the validation prompts, the
-training instance prompt, `training_provenance.json`, and the B1 inpaint prompt.
-It is a LoRA concept trigger, not a textual-inversion embedding (no tokenizer
-special token is added).
+`edge_seam_score`, `runtime_seconds`, `cuda_peak_mb`. The person metrics require
+a detector — `person_detector.load_person_detector` (YOLOv8n) supplies it;
+without it `person_*` read 0/None.
 
 ## Tests
 
 `pytest LoRA/tests/` — release validation gates, caption contract, inpaint metric
-contract, provenance. (Requires `pandas`, `pyarrow`, `pillow`, `numpy`, `pyyaml`.)
+contract, PIPE eval builder + person filter, segment-paste compositor, provenance.
+(Requires `pandas`, `pyarrow`, `pillow`, `numpy`, `pyyaml`.)
