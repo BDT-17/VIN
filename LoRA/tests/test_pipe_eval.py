@@ -3,7 +3,8 @@
 import numpy as np
 import pytest
 
-from LoRA.data.build_eval_cases_pipe import _is_person, _derive_mask, _bbox_from_mask
+from LoRA.data.build_eval_cases_pipe import (
+    _is_person, _is_person_class, _derive_mask, _bbox_from_mask)
 
 pytest.importorskip("PIL")
 
@@ -17,6 +18,24 @@ def test_person_filter_matches_person_words():
 def test_person_filter_rejects_non_person():
     assert not _is_person("dog", "Add a dog on the grass")
     assert not _is_person("bicycle", "place a bicycle at the left")
+
+
+def test_person_class_filter_matches_person_classes():
+    # strict mask-free filter: object CLASS must be a person
+    assert _is_person_class("person")
+    assert _is_person_class("man")
+    assert _is_person_class("woman")
+    assert _is_person_class("child")
+
+
+def test_person_class_filter_is_class_only_no_text_leak():
+    # the leak the loose filter allows: non-person class, caption mentions a man
+    assert _is_person("hat", "a man's hat on the table")        # loose: leaks
+    assert not _is_person_class("hat")                          # strict: excluded
+    # substring traps must not match (whole-word regex)
+    assert not _is_person_class("mane")        # contains 'man'
+    assert not _is_person_class("german")      # contains 'man'
+    assert not _is_person_class("")
 
 
 def test_derive_mask_marks_changed_region_only():

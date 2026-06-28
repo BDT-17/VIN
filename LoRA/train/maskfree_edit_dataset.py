@@ -18,12 +18,18 @@ from typing import Iterator, Dict
 
 import numpy as np
 
-from ..data.build_eval_cases_pipe import _is_person, _derive_mask
+from ..data.build_eval_cases_pipe import _is_person_class, _derive_mask
 
 
 def iter_pipe_pairs(split="train", person_only=True, num_samples=4000,
                     diff_thresh=25, min_change_pixels=64) -> Iterator[Dict]:
     """Yield up to num_samples mask-free training items from PIPE.
+
+    person_only filters strictly on PIPE's ``Instruction_Class`` (the object
+    category) — every PIPE pair is an "add object" edit, so a person-class pair
+    is exactly an "add a person" example. Matching the class field only (not the
+    free-text caption) keeps non-person objects out even when their caption
+    mentions a person.
 
     diff_thresh / min_change_pixels: a pair is kept only if |target-source|
     exceeds diff_thresh on at least min_change_pixels pixels (drops no-op pairs).
@@ -37,7 +43,7 @@ def iter_pipe_pairs(split="train", person_only=True, num_samples=4000,
     for row in ds:
         instr = row.get("Instruction_VLM-LLM", "")
         cls = row.get("Instruction_Class", "")
-        if person_only and not _is_person(cls, instr):
+        if person_only and not _is_person_class(cls):
             continue
         source = row["source_img"].convert("RGB")
         target = row["target_img"].convert("RGB")

@@ -38,6 +38,19 @@ def _is_person(instruction_class: str, instruction_text: str) -> bool:
     return _PERSON_RE.search(blob) is not None
 
 
+def _is_person_class(instruction_class: str) -> bool:
+    """Strict filter: the OBJECT CLASS itself must be a person.
+
+    PIPE is an object-ADDITION dataset, so the action is always "add"; the
+    ``Instruction_Class`` field holds the object category (person, dog, car...).
+    Matching only this field — never the free-text VLM caption — avoids leaks
+    like class="hat" whose caption mentions "a man's hat". Use this for the
+    mask-free add-a-person flow; ``_is_person`` (class OR text) stays for the
+    looser flows that want maximum recall.
+    """
+    return _PERSON_RE.search((instruction_class or "").lower()) is not None
+
+
 def _derive_mask(source_rgb: np.ndarray, target_rgb: np.ndarray,
                  thresh: int = 25, dilate_px: int = 6) -> np.ndarray:
     """mask = dilate(|target - source| > thresh). Returns uint8 {0,255}."""
