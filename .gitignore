@@ -24,3 +24,15 @@ Thumbs.db
 *.pt
 *.ckpt
 run_*/
+
+# LaTeX build artifacts (docs/report)
+docs/report/*.aux
+docs/report/*.log
+docs/report/*.bbl
+docs/report/*.blg
+docs/report/*.out
+docs/report/*.synctex.gz
+docs/report/*.fls
+docs/report/*.fdb_latexmk
+docs/report/*.toc
+docs/report/*.pdf
