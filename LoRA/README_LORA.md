@@ -61,6 +61,10 @@ Notebooks hold **no** ETL/train/eval logic — they only call `LoRA.data`,
 | `concept_02_segment_paste.ipynb` | **Concept inference**: load a trained concept adapter → generate → YOLO-seg → paste person into the original (100% bg preserved). |
 | `data_01_build_lora_release.ipynb` | Build a VIN dataset release via the ETL pipeline (independent data tool). |
 
+> The old mask-free / inpaint-edit notebooks and modules were removed. Any cell
+> importing `LoRA.train.train_maskfree_edit` or `LoRA.inference.run_maskfree_eval`
+> is stale — use `LoRA.train.train_concept_lora` / `LoRA.inference.run_concept_eval`.
+
 ## A. Concept train (`notebooks/concept_01_all_in_one.ipynb`)
 
 Trains on **PIPE** ([`paint-by-inpaint/PIPE`](https://huggingface.co/datasets/paint-by-inpaint/PIPE)).
@@ -119,5 +123,6 @@ duplicate-cluster or group overlap between train/val, or eval leakage.
 ## Tests
 
 `pytest LoRA/tests/` — release validation gates, caption contract, concept caption
-builder, PIPE eval builder + person filter, segment-paste compositor, provenance.
+builder, PIPE eval builder + person filter, segment-paste compositor (clean/tight
+cut), source-image listing, provenance.
 (Requires `pandas`, `pyarrow`, `pillow`, `numpy`, `pyyaml`.)
