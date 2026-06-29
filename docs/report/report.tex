@@ -195,15 +195,15 @@ something the pipeline guarantees by construction. See \cref{fig:teaser}.
 
 \begin{figure}[t]
   \centering
-  % \includegraphics[width=\textwidth]{figs/teaser.pdf}
-  \fbox{\parbox[c][3cm][c]{0.9\textwidth}{\centering\TODO{teaser figure:
-  source $\to$ inserted object $\to$ background-diff heatmap showing change is
-  confined to the object region.}}}
+  \includegraphics[width=\textwidth]{Images/teaser_v5.png}
   \caption[Teaser]{One source image, one inserted pedestrian, and the
-  source-to-output difference map for a segment-and-composite flow. The
-  difference is confined to the object region; pixels outside it are unchanged,
-  illustrating the background-as-source-of-truth property this work studies.
-  \TODO{replace with a rendered example.}}
+  source-to-composite difference map for the V5 segment-and-composite flow
+  (CityPersons \texttt{aachen\_000139}, \texttt{add\_occluded\_pedestrian}).
+  The difference (right; blue\,$=$\,0, warmer\,$=$\,larger) is confined to the
+  inserted-object region: outside it the mean per-pixel RGB difference is
+  $0.4/255$, while the object reaches $171/255$. Pixels outside the object are
+  unchanged by construction, illustrating the background-as-source-of-truth
+  property this work studies.}
   \label{fig:teaser}
 \end{figure}
 
