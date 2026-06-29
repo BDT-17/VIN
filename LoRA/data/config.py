@@ -134,9 +134,3 @@ def load_prompt_config(path=None) -> PromptConfig:
 
 def load_train_config(path=None) -> dict:
     return _load_yaml(path or CONFIGS_DIR / "lora_train.yaml")
-
-
-# ---- inpaint_eval.yaml ------------------------------------------------------
-
-def load_inpaint_eval_config(path=None) -> dict:
-    return _load_yaml(path or CONFIGS_DIR / "inpaint_eval.yaml")

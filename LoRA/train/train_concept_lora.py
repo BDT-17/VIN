@@ -3,9 +3,9 @@
 This is the SIMPLE flow the user actually wants: train ONE LoRA so the base model
 learns to GENERATE images like the PIPE "add a person" subset. It is a plain
 DreamBooth-style text->image LoRA — there is NO mask, NO source image, NO
-input_proj, and NO segment/paste step. Contrast with train_maskfree_edit.py,
-which trains an EDIT model on before/after pairs; that whole machinery is dropped
-here.
+input_proj, and NO segment/paste step. It is a straight text->image LoRA; the
+segment-and-paste compositing (for 100% background preserve) is an optional
+inference-time step, not part of training.
 
 Conditioning (standard SD3 flow matching):
     target_lat = VAE(image)
@@ -29,7 +29,7 @@ from pathlib import Path
 import torch
 
 from ..data.config import load_train_config
-from .spike_inpaint_edit import _vae_encode
+from .vae_utils import _vae_encode
 from .provenance import write_gpu_info, write_pip_freeze, sha256_file
 
 

@@ -1,20 +1,19 @@
-"""Segment-and-paste compositor for the mask-free -> paste pipeline.
+"""Segment-and-paste compositor for the concept -> paste pipeline.
 
-Pipeline (per the 2026-06-27 pivot):
-  1. mask-free model generates a FULL image that adds a person matching the
-     scene "vibe" of the source (sd35_maskfree_runner.edit).
+Pipeline:
+  1. the concept (text->image) model generates a FULL image containing a person
+     from the prompt alone (sd35_concept_runner.generate) — it does NOT see the
+     original.
   2. YOLOv8-seg segments the person out of that generated image
      (person_detector.load_person_segmenter).
-  3. this module pastes that person back onto the ORIGINAL background at the same
-     coordinates, feathering the seam + matching colour to the original so the
-     paste does not read as a sticker.
+  3. this module pastes that person onto the ORIGINAL background, feathering the
+     seam + matching colour to the original so the paste does not read as a sticker.
 
-Why this composite is needed: the mask-free model owns the whole canvas, so its
-output background can drift from the original (lighting, geometry). Pasting only
-the segmented person preserves the original background byte-exact OUTSIDE the
-person — the same "100% background preserve" goal the mask-based flow chased, but
-achieved by composite instead of hard-restore. The cost is harmonisation: the
-person was lit by the *generated* scene, so we colour-match it to the original.
+Why this composite is needed: the generated background is the model's own scene,
+not the original. Pasting only the segmented person preserves the original
+background byte-exact OUTSIDE the person ("100% background preserve") by composite
+instead of hard-restore. The cost is harmonisation: the person was lit by the
+*generated* scene, so we colour-match it to the original.
 
 Pure numpy + PIL (no torch, no OpenCV hard dependency); Poisson blending is
 offered as an optional OpenCV path. CPU-cheap — runs anywhere.
@@ -156,47 +155,6 @@ def _poisson_blend(bg_arr, person_arr, mask_bool):
     return blended[..., ::-1].astype(np.float32)   # BGR->RGB
 
 
-def generate_and_paste(
-    runner,
-    original_img,
-    prompt,
-    segmenter,
-    seed: int = 42,
-    num_inference_steps: int = 30,
-    resolution: int = 512,
-    s_image: float = 1.5,
-    s_text: float = 7.5,
-    feather_px: int = 3,
-    color_match: float = 0.5,
-    poisson: bool = False,
-):
-    """End-to-end one-image step: mask-free generate -> segment -> paste.
-
-    runner    : an SD35MaskFreeRunner (already loaded, embeds precomputed).
-    original_img : path or PIL.Image — the background the person is pasted onto.
-    segmenter : load_person_segmenter() callable.
-
-    Returns (composited PIL.Image, generated PIL.Image, info). Returning the raw
-    generated frame too lets the caller build a source|generated|composite sheet.
-    """
-    from PIL import Image
-    orig = original_img
-    if isinstance(orig, (str, Path)):
-        orig = Image.open(orig)
-    orig = orig.convert("RGB")
-
-    generated = runner.edit(
-        orig, prompt, seed=seed, num_inference_steps=num_inference_steps,
-        resolution=resolution, s_image=s_image, s_text=s_text,
-    )
-    persons = segmenter(generated)
-    composite, info = composite_persons(
-        orig, generated, persons,
-        feather_px=feather_px, color_match=color_match, poisson=poisson,
-    )
-    return composite, generated, info
-
-
 def generate_and_paste_concept(
     runner,
     original_img,
@@ -213,9 +171,8 @@ def generate_and_paste_concept(
     """End-to-end one-image step for the CONCEPT (text->image) LoRA:
     generate (from prompt only, NO source) -> segment person -> paste onto original.
 
-    Unlike ``generate_and_paste`` (mask-free EDIT runner, conditioned on the source
-    image), the concept runner does not see the original — it generates a person
-    in its own scene from the text prompt. We then segment that person and paste it
+    The concept runner does not see the original — it generates a person in its own
+    scene from the text prompt. We then segment that person and paste it
     onto ``original_img``, so the original background is preserved (byte-exact
     outside the person; the ``feather_px`` band blends the silhouette edge — set
     ``feather_px=0`` for a strictly byte-exact background).

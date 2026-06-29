@@ -1,19 +1,15 @@
-"""Person detector for the inpaint/edit eval.
+"""Person detector + segmenter (ultralytics YOLOv8).
 
-The eval metric contract (see ``inpaint_metrics.person_metrics``) expects a
-callable::
+The concept segment-and-paste flow uses ``load_person_segmenter`` to cut the
+generated person out before pasting it onto the original
+(see ``segment_paste``). ``load_person_detector`` (bbox only) is also provided
+for any bbox-level person check::
 
     detector(image_path) -> [{"bbox_xyxy": [x1, y1, x2, y2], "conf": float}, ...]
 
-restricted to *person* detections. This module provides an ultralytics YOLOv8
-backend. It is the missing piece that made ``run_edit_eval`` blind: without a
-detector, ``person_inside_mask_ratio`` / ``scale_ratio`` are hardcoded to 0.0 /
-None, so the eval could never tell whether the generated person actually landed
-inside the mask at the right scale.
-
-YOLO COCO class 0 == person. ``yolov8n.pt`` is tiny (~6MB) and downloads on
-first use; on Kaggle (no internet during run) point ``weights`` at a dataset
-mount instead, e.g. ``/kaggle/input/yolov8n/yolov8n.pt``.
+YOLO COCO class 0 == person. ``yolov8n.pt`` / ``yolov8n-seg.pt`` are tiny and
+download on first use; on Kaggle (no internet during run) point ``weights`` at a
+dataset mount instead, e.g. ``/kaggle/input/yolov8n/yolov8n.pt``.
 """
 
 from pathlib import Path
