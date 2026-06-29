@@ -341,10 +341,28 @@ def load_semantic_segmenter(device=TRAIN_DEVICE):
                 SEMANTIC_SEGMENTATION_MODEL_ID,
                 use_fast=False,
             )
-        segmentation_model = AutoModelForSemanticSegmentation.from_pretrained(
-            SEMANTIC_SEGMENTATION_MODEL_ID,
-            low_cpu_mem_usage=False,
-        ).to("cpu")
+        # Load weights straight onto CPU. `low_cpu_mem_usage=False` was meant to
+        # avoid the accelerate offload path, but some accelerate/transformers
+        # combos still materialize weights on the `meta` device, so a later
+        # .to("cpu") raises "Cannot copy out of meta tensor". Passing an explicit
+        # device_map="cpu" makes from_pretrained place real weights on CPU itself
+        # (no post-hoc .to() move, no meta tensors). Do NOT use .to_empty() here:
+        # it would move only the module structure and drop the pretrained
+        # weights, yielding garbage segmentation masks.
+        try:
+            segmentation_model = AutoModelForSemanticSegmentation.from_pretrained(
+                SEMANTIC_SEGMENTATION_MODEL_ID,
+                torch_dtype=torch.float32,
+                device_map="cpu",
+            )
+        except (ValueError, TypeError):
+            # device_map needs accelerate; fall back to the explicit two-step
+            # load when it is unavailable.
+            segmentation_model = AutoModelForSemanticSegmentation.from_pretrained(
+                SEMANTIC_SEGMENTATION_MODEL_ID,
+                low_cpu_mem_usage=False,
+                torch_dtype=torch.float32,
+            ).to("cpu")
         segmentation_model.eval()
         SEMANTIC_SEGMENTER = {
             "processor": image_processor,
@@ -724,7 +742,12 @@ def candidate_insertion_score(candidate, existing_person_bboxes, existing_vehicl
             score -= INSERTION_OVERLAP_PENALTY * (vehicle_overlap_ratio - MAX_VEHICLE_OVERLAP_RATIO)
     elif vehicle_overlap_ratio > 0:
         score -= INSERTION_OVERLAP_PENALTY * vehicle_overlap_ratio
-    if REQUIRE_SEMANTIC_PLACEMENT and semantic_masks is None:
+    # REQUIRE_SEMANTIC_PLACEMENT only makes sense when the segmenter is actually
+    # usable. If it failed to load (SEMANTIC_SEGMENTER is False) every image gets
+    # semantic_masks=None, and enforcing the requirement would reject 100% of
+    # candidates ("bad_placement") even though the log says it fell back to V1.
+    # In that case, genuinely fall back to V1 scoring instead of hard-rejecting.
+    if REQUIRE_SEMANTIC_PLACEMENT and semantic_masks is None and SEMANTIC_SEGMENTER is not False:
         return -1e9
     if semantic_masks:
         valid_mask = semantic_masks.get("valid")
