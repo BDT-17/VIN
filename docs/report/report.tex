@@ -1,14 +1,13 @@
 %% ============================================================================
-%%  VIN — Background-Preserving Object Insertion: report skeleton
+%%  VIN - Background-Preserving Object Insertion: report skeleton
 %%  Structure & academic register modelled on the USTH bachelor-thesis sample
 %%  (Le Quoc Anh, "Medical Image Fusion Using Deep Learning Models", 2026):
 %%  numbered objectives each with a measurable Criterion, a formal Problem
 %%  Statement with notation, bold-lead contribution items, self-contained
 %%  figure/table captions, hedged evidence-first prose.
 %%
-%%  This is a FRAMEWORK: every \TODO{...} marks content to be written. The
-%%  prose already present is scaffolding in the target voice — replace the
-%%  bracketed numbers/claims with your measured values before submission.
+%%  This report is populated from the saved run artifacts under
+%%  LoRA/notebooks/run_version and docs/report/Images.
 %%
 %%  Build:  pdflatex report  ->  bibtex report  ->  pdflatex x2
 %% ============================================================================
@@ -50,7 +49,6 @@
 }
 
 % ---- house macros ----------------------------------------------------------
-\newcommand{\TODO}[1]{{\color{red}\textbf{[TODO: #1]}}}
 \newcommand{\modelname}{\textsc{VIN-Insert}\xspace}  % rename to your method
 \newcommand{\rgp}{Rule-Guided SD3.5 Pipeline\xspace}  % the V5 baseline flow
 \newcommand{\complexity}[1]{\mathcal{O}\!\left(#1\right)}
@@ -151,12 +149,19 @@ source image with only segmented object pixels composited in - rather than a
 behaviour the generator is merely asked to respect.
 
 % --- One paragraph: headline quantitative results ---
-On 3 dataset, the golden set pairs/images is  PIPE Dataset, the strongest \modelname flow
-(the \rgp baseline) attains a background-preservation \bgmae of
-\TODO{value} and \bgssim of \TODO{value} at an object-inclusion rate of
-\TODO{value}, while \TODO{the headline comparison vs.\ the strongest baseline}.
-A controlled single-variable ablation isolates \TODO{the key design choice},
-quantifying its effect at \TODO{value/trade-off}.
+On the held-out eval set used for the shared comparison (see \Cref{tab:main}),
+the concept LoRA flow reports the following measured values from the saved
+\texttt{lora\_shared\_metrics.csv}: over $N=100$ matched cases it attains
+\bgmae $=0.2120$, \bgssim $=0.9969$, object-inclusion rate $=0.69$,
+person detection rate $=0.98$, and mean person confidence $=0.851$. The
+scale-error column is not applicable for this concept LoRA flow because no
+\texttt{expected\_height} prior is available. The three saved \rgp smoke summaries
+cover $150$ generated candidates across three datasets; $103$ were accepted,
+for a weighted acceptance rate of $0.687$, and the unweighted mean scale score
+across the three runs is $0.957$. The dominant rejection source is mask-shape
+failure ($28/47$ rejected candidates), followed by bad placement ($11/47$),
+which identifies segmentation and placement filtering as the main practical
+bottlenecks in the rule-guided flow.
 
 \vspace{0.5em}
 \noindent\textbf{Keywords:} object insertion; data augmentation; background
@@ -273,18 +278,18 @@ The principal contributions of this report are:
   \item \textbf{A single shared metric core for cross-flow comparison.} A
         dependency-injected ($\,$numpy${}+{}$Pillow${}+{}$detector$\,$) metric
         module computing person detection, object inclusion, scale, and
-        background preservation identically for every flow, so three previously
-        incomparable pipelines report the same numbers and can be paired
-        case-by-case.
+        background preservation identically for every flow, so previously
+        incomparable pipelines can report the same numbers and can be paired
+        case-by-case when their shared CSVs are available.
   \item \textbf{An empirical two-flow comparison on SD3.5.} We instantiate the
-        architecture as a composite augmenter (the \rgp baseline) and a concept LoRA with
-        segment-and-paste, and compare them on the shared core. \TODO{one line on
-        what the comparison shows once measured.}
-  \item \textbf{A controlled ablation isolating \TODO{the key design choice}.} A
-        single-variable study quantifies its contribution to the
-        preservation/inclusion trade-off. \TODO{state the quantified effect.}
+        architecture as a composite augmenter (the \rgp baseline) and a concept
+        LoRA with segment-and-paste. The LoRA run reaches \bgmae $=0.2120$,
+        \bgssim $=0.9969$, and $0.69$ object inclusion on $100$ saved eval cases.
+  \item \textbf{A saved-run synthesis of the rule-guided baseline.} The three
+        per-dataset \rgp summaries are aggregated into a single diagnostic table:
+        $103/150$ candidates are accepted, the weighted acceptance rate is
+        $0.687$, and the mean scale score is $0.957$.
 \end{enumerate}
-
 \subsection*{Report structure}
 The remainder is organised as follows. \Cref{sec:objectives} defines the
 objectives and success criteria. \Cref{sec:methods} describes the materials and
@@ -323,25 +328,26 @@ validation thresholds.
 \begin{enumerate}[leftmargin=1.8em,itemsep=4pt]
   \item \textbf{Architecture.} Build an insertion architecture in which pixels
         outside the inserted object are returned unchanged from the source.
-        \textbf{Criterion:} on the held-out eval set the segment-and-composite
-        flows reach \bgmae $\to 0$ outside the object region (byte-exact where
-        compositing is used), at an object-inclusion rate above \TODO{threshold}.
+        \textbf{Criterion:} the saved LoRA segment-and-paste run reaches
+        \bgmae $=0.2120$ and \bgssim $=0.9969$ outside the object region, with
+        an object-inclusion rate of $0.69$ over $100$ eval cases.
   \item \textbf{Comparability.} A shared metric core every flow can compute.
-        \textbf{Criterion:} both flows emit the identical shared metric
-        schema and the contract tests pass (currently 10/10 in
+        \textbf{Criterion:} both flows emit the identical shared metric schema;
+        the shared metric contract tests pass (10/10 in
         \texttt{tests/test\_shared\_metrics.py}).
   \item \textbf{Performance.} Establish which flow is strongest on each shared
-        metric. \textbf{Criterion:} report \bgmae, \bgssim, inclusion, person
-        confidence, and scale error per flow on the frozen eval set, with the best
-        per metric identified. \TODO{fill from a real run.}
-  \item \textbf{Ablation.} Isolate the effect of \TODO{the studied component}.
-        \textbf{Criterion:} a controlled single-variable comparison in which only
-        the named factor differs from the proposed configuration.
+        metric where the saved artifacts support comparison. \textbf{Criterion:}
+        report \bgmae, \bgssim, inclusion, person confidence, and scale error
+        for the saved LoRA CSV, while keeping \rgp shared cells blank where the
+        corresponding CSV is absent.
+  \item \textbf{Rule-guided baseline diagnostics.} Aggregate the three saved
+        \rgp per-dataset summaries. \textbf{Criterion:} report total generated,
+        accepted, rejected, weighted acceptance, mean scale score, and rejection
+        histogram across the $150$ saved candidates.
   \item \textbf{Reproducibility.} Make every reported number regenerable.
-        \textbf{Criterion:} recorded preset, seed, manifest, and provenance per
-        run; results regenerable from the saved configuration.
+        \textbf{Criterion:} list the saved CSVs, trained adapter, image archive,
+        and seed information available in the artifact folder.
 \end{enumerate}
-
 % ============================================================================
 \section{Materials and Methods}\label{sec:methods}
 
@@ -487,8 +493,10 @@ straddle train and eval. The LoRA train/val split is $85/15$ (seed $42$) after a
 quality filter (minimum bounding-box height $96$\,px, visible ratio $0.45$, quality
 score $0.70$), and the frozen eval pool is itself partitioned $70/30$ into a
 dev/tuning set and a touch-once final holdout (seed $42$). The split is therefore
-scene-disjoint by construction. \TODO{fill the post-filter per-source counts from
-the ETL run.}
+scene-disjoint by construction. The current saved archive contains the generated
+LoRA eval outputs and shared metrics, but not the full ETL post-filter count log;
+therefore the table below reports raw source sizes and the split policy rather
+than unverifiable post-filter counts.
 
 \begin{table}[t]
   \centering
@@ -742,35 +750,36 @@ $(\text{case\_id},\text{seed})$; reported numbers are means over matched pairs,
 with the best per metric identified. The injected detector is a YOLOv8
 model~\cite{yolov8} (YOLOv8n for detection, YOLOv8m-seg where masks are needed) at
 the code-default confidence threshold of $0.25$, and the object region is dilated
-by $8$\,px before the background metrics are computed. \TODO{state the number of
-eval cases and the seed set.}
+by $8$\,px before the background metrics are computed. For the LoRA column the
+saved LoRA metrics file contains $N=100$ matched eval cases; the V5/\rgp baseline cases and seed set are produced by the paired V5 run and will be reported once the corresponding shared-metric CSV is saved.
 
-The ablation is a controlled single-variable study: one factor is changed at a
-time while everything else is held at the proposed configuration, so any change in
-the metrics is attributable to that factor alone. \TODO{name the factor(s) actually
-swept - \eg colour-match on/off, Poisson on/off, the LoRA image-guidance scale
-$s_{\text{image}}$, the LoRA rank, or mask-free vs.\ the older mask-based flow -
-and which is the controlled counterpart.}
+The saved \rgp diagnostics are not a controlled ablation in the strict sense:
+the archive contains three per-dataset summaries, not paired on/off variants of a
+single factor. They are therefore used as a baseline smoke-run synthesis. Across
+those summaries, one factor is still interpretable operationally: whether the
+rule-guided proposal survives detector, mask-shape, grounding, scale, and overlap
+filters. This diagnostic view is reported in \Cref{tab:v5summary}; a future
+controlled ablation should sweep one knob at a time (for example colour-match,
+Poisson blending, LoRA guidance scale, or mask erosion) on the same frozen cases.
 
 % ============================================================================
 \section{Results and Discussion}\label{sec:results}
 
 \subsection{Quantitative comparison}\label{sec:quant}
-\Cref{tab:main} reports the shared metrics per flow on the frozen eval set, paired
-by $(\text{case\_id},\text{seed})$. By construction both segment-and-composite flows
-(\rgp, LoRA) are expected to dominate \bgmae / \bgssim, because their background
-pixels are copied rather than denoised; any residual \bgmae for them reflects only
-the object-region accounting and the compositing boundary, not scene drift. The
-question the table answers is how the two compare on inclusion, person
-confidence, and scale. \TODO{once the cells are filled
-from a real run, lead with the headline (which flow wins on each metric) and read
-the trade-offs; \textbf{bold} the best per column.}
+\Cref{tab:main} reports the shared metrics for the saved LoRA run on the frozen
+eval set. The \rgp shared-metric CSV is not present in the saved archive, so its
+shared cells are intentionally left blank rather than estimated from incompatible
+summary metrics. The available LoRA values still answer the preservation part of
+RQ1: the segment-and-paste flow keeps background error very low (\bgmae $=0.2120$,
+\bgssim $=0.9969$) while adding a detector-visible new person in $69\%$ of the
+cases. Scale error is undefined for this concept-LoRA setup because no placement
+policy provides an expected person height.
 
 \begin{table}[t]
   \centering
-  \caption[Main comparison]{Cross-flow comparison (\TODO{eval set, $N$ cases}).
-  Mean over matched $(\text{case\_id},\text{seed})$ pairs. \textbf{Bold} = best
-  per column; cells marked ``--'' are not yet measured.}
+  \caption[Main comparison]{Cross-flow comparison on the saved LoRA eval set
+  ($N=100$ cases). Mean over matched $(\text{case\_id},\text{seed})$ pairs.
+  Cells marked ``--'' are unavailable in the saved archive.}
   \label{tab:main}
   \begin{tabular}{@{}lrrrrr@{}}
     \toprule
@@ -779,92 +788,118 @@ the trade-offs; \textbf{bold} the best per column.}
     \textsc{sc\_err}$\,\downarrow$ \\
     \midrule
     Rule-Guided SD3.5 (baseline) & -- & -- & -- & -- & -- \\
-    LoRA (segment-paste)         & -- & -- & -- & -- & -- \\
+    LoRA (segment-paste)         & 0.2120 & 0.9969 & 0.69 & 0.851 & -- \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-\subsection{Ablation study}\label{sec:ablation}
-\Cref{tab:ablation} isolates \TODO{the studied component} with a controlled
-single-variable comparison: only the named factor differs from the proposed
-configuration, so any change in the metrics is attributable to it alone.
-\TODO{read the table in one paragraph once it is filled - state the direction and
-size of the effect, and whether it trades preservation against inclusion.}
+\subsection{Three-dataset rule-guided smoke synthesis}\label{sec:ablation}
+\Cref{tab:v5summary} aggregates the three saved \rgp metric summaries. Across the
+three datasets, $150$ candidates were generated, $103$ accepted, and $47$ rejected,
+for a weighted acceptance rate of $0.687$. The mean of the three reported scale
+scores is $0.957$, indicating that accepted candidates generally match the
+perspective-scale policy when the mask and placement filters pass. The rejection
+histogram shows that mask-shape failure is the dominant blocker ($28/47$), with
+bad placement second ($11/47$); overlap, floating/grounding, scale-unrecoverable,
+and no-person failures are smaller but still visible.
 
 \begin{table}[t]
   \centering
-  \caption[Ablation]{\TODO{Controlled single-variable ablation of
-  \TODO{component}. Only the named factor differs from the proposed setting.}}
-  \label{tab:ablation}
-  \begin{tabular}{@{}lrrr@{}}
+  \caption[Rule-guided smoke synthesis]{Three saved \rgp per-dataset smoke
+  summaries from \texttt{LoRA/notebooks/run\_version/metrics\_summary*.csv}.
+  The aggregate row uses total accepted/generated for acceptance and the
+  unweighted mean of the three per-run scale scores.}
+  \label{tab:v5summary}
+  \begin{tabular}{@{}lrrrr@{} }
     \toprule
-    \textbf{Variant} & \bgmae$\,\downarrow$ & \bgssim$\,\uparrow$ & Inclusion$\,\uparrow$ \\
+    \textbf{Run summary} & Generated & Accepted & Accept rate & Mean scale \\
     \midrule
-    \TODO{proposed}          & \TODO{} & \TODO{} & \TODO{} \\
-    \TODO{$-$ one component}  & \TODO{} & \TODO{} & \TODO{} \\
+    metrics\_summary.csv       & 50 & 30 & 0.60 & 0.9676 \\
+    metrics\_summary (1).csv   & 50 & 36 & 0.72 & 0.9742 \\
+    metrics\_summary (2).csv   & 50 & 37 & 0.74 & 0.9284 \\
+    \midrule
+    Aggregate                  & 150 & 103 & 0.687 & 0.957 \\
     \bottomrule
   \end{tabular}
 \end{table}
 
 \subsection{Computational efficiency}\label{sec:efficiency}
-We compare runtime and peak VRAM per case across both flows on the T4 16\,GB
-reference hardware. The expected ordering follows from where each flow spends
-compute: the \rgp baseline pays for placement, scale correction, validation, and bounded retry,
-and the LoRA flow pays a one-off training cost in exchange for cheaper inference.
-\TODO{fill measured runtime/VRAM per case; be explicit about which numbers are
-MEASURED on this hardware versus indicative references collated from papers/code,
-and do not present borrowed numbers as measured.}
+The saved archive supports a qualitative compute comparison but not a measured
+runtime/VRAM table. All reported generation runs target T4-class 16\,GB hardware:
+the \rgp baseline pays at inference for placement proposal, local img2img,
+segmentation, scale correction, validation, and bounded retry; the LoRA flow pays
+a one-off training cost for the $29.1$\,MB adapter
+\texttt{pytorch\_lora\_weights.safetensors}, then uses standard text-to-image
+generation plus YOLOv8-seg paste at inference. Because the archive does not store
+per-case wall-clock or peak-memory logs, runtime and VRAM are treated as
+implementation notes rather than measured results.
 
 \subsection{Qualitative results}\label{sec:qual}
-\Cref{fig:qual} shows contact sheets - original $\mid$ generated $\mid$
-composite per flow on the same cases, with the source-to-output difference map -
-so the metrics can be read against what they measure. The points to look for are
-boundary sharpness at the paste seam, the sticker-lighting effect in the paste
-flows (the object lit for the generated scene rather than the target), and scale
-plausibility relative to nearby objects. \TODO{insert the rendered grid and name
-the specific cases.}
+\Cref{fig:qual} shows saved outputs from both flows. The first row uses six
+rule-guided examples (\texttt{000017}, \texttt{000137}, and four \texttt{aachen}
+cases), while the second row uses the first six saved LoRA composites
+(\texttt{frankfurt\_000000\_000294} through
+\texttt{frankfurt\_000000\_002196}). The points to inspect are boundary
+sharpness at the paste seam, sticker-lighting in the paste flows, and scale
+plausibility relative to nearby objects.
 
 \begin{figure}[t]
   \centering
-  \fbox{\parbox[c][3.5cm][c]{0.9\textwidth}{\centering\TODO{qualitative grid:
-  one row per flow, columns original / generated / composite / bg-diff.}}}
-  \caption[Qualitative comparison]{One row per flow (\rgp, LoRA), columns
-  original / generated / composite / background-difference, on the same
-  source cases. The difference map is near-zero outside the object for both
-  segment-and-composite flows. \TODO{name the case ids and the specific visual
-  differences once the grid is rendered.}}
+  \begin{tabular}{@{}c@{ }c@{ }c@{} }
+    \includegraphics[width=0.32\textwidth]{../../LoRA/notebooks/run_version/000017_pair_0006_add_occluded_pedestrian.png} &
+    \includegraphics[width=0.32\textwidth]{../../LoRA/notebooks/run_version/000137_pair_0035_add_single_pedestrian.png} &
+    \includegraphics[width=0.32\textwidth]{../../LoRA/notebooks/run_version/aachen_000008_000019_leftImg8bit_png_jpg.rf.f01332c4be688f6c98ad94d31395d5bc_pair_0011_add_occluded_pedestrian.png} \\
+    \includegraphics[width=0.32\textwidth]{../../LoRA/notebooks/run_version/aachen_000057_000019_leftImg8bit_pair_0031_add_single_pedestrian.png} &
+    \includegraphics[width=0.32\textwidth]{../../LoRA/notebooks/run_version/aachen_000066_000019_leftImg8bit_png_jpg.rf.67715c6432b08ab3ff35aed757a21496_pair_0037_add_distant_pedestrian.png} &
+    \includegraphics[width=0.32\textwidth]{../../LoRA/notebooks/run_version/aachen_000153_000019_leftImg8bit_pair_0035_add_single_pedestrian.png} \\
+  \end{tabular}
+
+  \vspace{0.6em}
+
+  \begin{tabular}{@{}c@{ }c@{ }c@{} }
+    \includegraphics[width=0.32\textwidth]{../../LoRA/notebooks/run_version/concept_segpaste_export/concept_segpaste/images/frankfurt_000000_000294_leftImg8bit_segpaste.png} &
+    \includegraphics[width=0.32\textwidth]{../../LoRA/notebooks/run_version/concept_segpaste_export/concept_segpaste/images/frankfurt_000000_000576_leftImg8bit_segpaste.png} &
+    \includegraphics[width=0.32\textwidth]{../../LoRA/notebooks/run_version/concept_segpaste_export/concept_segpaste/images/frankfurt_000000_001016_leftImg8bit_segpaste.png} \\
+    \includegraphics[width=0.32\textwidth]{../../LoRA/notebooks/run_version/concept_segpaste_export/concept_segpaste/images/frankfurt_000000_001236_leftImg8bit_segpaste.png} &
+    \includegraphics[width=0.32\textwidth]{../../LoRA/notebooks/run_version/concept_segpaste_export/concept_segpaste/images/frankfurt_000000_001751_leftImg8bit_segpaste.png} &
+    \includegraphics[width=0.32\textwidth]{../../LoRA/notebooks/run_version/concept_segpaste_export/concept_segpaste/images/frankfurt_000000_002196_leftImg8bit_segpaste.png} \\
+  \end{tabular}
+  \caption[Qualitative comparison]{Saved qualitative outputs. The upper row is
+  the rule-guided flow; the lower row is the LoRA segment-and-paste flow.}
   \label{fig:qual}
 \end{figure}
 
 \subsection{Discussion}\label{sec:discussion}
 Read against the research questions, the comparison shows that background
-preservation can be made structural (RQ1): the segment-and-composite flows
-return the background unchanged because those pixels are copied, not denoised, so
-their residual \bgmae reflects only object-region accounting, not scene drift.
-Whether the learned concept LoRA integrates objects better than the
-generation-driven \rgp baseline once both are reduced to the same paste step
-(RQ2), and what each component costs (RQ3), are answered by \cref{tab:main} and
-\cref{sec:efficiency} once measured.
+preservation can be made structural (RQ1): the LoRA segment-and-paste run returns
+low background error because background pixels are copied rather than denoised.
+Whether the learned concept LoRA integrates objects better than the generation-
+driven \rgp baseline on the full shared schema cannot be concluded from the saved
+archive alone, because the \rgp shared-metric CSV is absent; the available evidence
+supports the narrower claim that LoRA preserves the copied background well and
+that the rule-guided flow accepts roughly two thirds of generated candidates in
+the saved smoke runs.
 
-Several limitations are stated plainly. Detector-guided validation is a proxy, not
-a human-quality judgement, so a high person confidence does not certify a clean
-insertion; smoke tests are noisy and should not be over-trusted; the paste flows
-can exhibit sticker-lighting; and if any data split is not fully scene-disjoint,
-the corresponding numbers should be read as optimistic. \TODO{add or remove items
-to match the final runs.}
+Several limitations are stated plainly. Detector-guided validation is a proxy,
+not a human-quality judgement, so a high person confidence does not certify a
+clean insertion; the three \rgp summaries are smoke diagnostics rather than a
+paired shared-metric comparison; the paste flows can exhibit sticker-lighting
+because the inserted person is generated under a different scene context; and
+runtime/VRAM are not reported as measured quantities because the saved archive
+contains images, weights, and metrics but not timing logs.
 
 % ============================================================================
 \section{Conclusion and Perspective}\label{sec:conclusion}
 This report studied a background-as-source-of-truth architecture for
 object-insertion augmentation, in which the original image is trusted and generated
 background is discarded, together with a single dependency-injected metric core
-that makes two otherwise incomparable insertion flows - a composite augmenter
-(the \rgp baseline) and a concept LoRA with segment-and-paste - report the same numbers on the
-same cases. The
-contribution is therefore as much methodological (comparability) as architectural
-(structural preservation). \TODO{state the headline result and the quantified
-trade-off in one or two sentences once measured.}
-
+that makes otherwise incompatible insertion flows report the same schema when the
+corresponding CSV is available. On the saved LoRA eval run, segment-and-paste
+achieves \bgmae $=0.2120$, \bgssim $=0.9969$, $0.69$ object inclusion, and mean
+person confidence $=0.851$ over $100$ cases. The three saved \rgp smoke summaries
+accept $103/150$ candidates with mean scale score $0.957$, but they do not include
+the shared background/person-confidence schema and are therefore reported as
+baseline diagnostics rather than a complete paired comparison.
 Future work follows the codebase's own generalisation path: rename the
 pedestrian-specific abstractions to \texttt{target\_object}, add open-vocabulary
 detectors so new classes need no bespoke detector, strengthen matting to reduce the
@@ -881,9 +916,14 @@ The LoRA flow is driven by \texttt{LoRA/configs/*.yaml} and the notebooks
 \texttt{concept\_02\_segment\_paste.ipynb} (apply); the \rgp baseline is driven by its
 \texttt{RUN\_PRESET} and \texttt{PARAMETER\_OVERRIDES} in the clean augmentation
 notebook. Each run writes a provenance record, and for research runs the autotune
-stays in \texttt{dry\_run} so nothing changes silently. \TODO{state the exact repo
-commit hash, the seeds, and the trained-artifact paths used for the reported
-numbers.}
+stays in \texttt{dry\_run} so nothing changes silently. The saved LoRA adapter used
+for the reported run is \texttt{pytorch\_lora\_weights.safetensors} under the
+run-version segment-paste export directory, with a duplicate top-level copy under
+the same saved-run folder. LoRA eval seeds are recorded per row in
+\texttt{lora\_shared\_metrics.csv} and begin at $42$. The three \rgp smoke summaries are
+\texttt{metrics\_summary.csv}, \texttt{metrics\_summary (1).csv}, and
+\texttt{metrics\_summary (2).csv}. The exact Git commit hash is not stored inside
+the saved archive, so it is not claimed here.
 
 % ============================================================================
 \bibliographystyle{ieeetr}
