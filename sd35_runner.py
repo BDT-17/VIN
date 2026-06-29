@@ -33,6 +33,7 @@ from sd35_utils import *
 from sd35_model import *
 from sd35_evaluation import *
 from sd35_pipeline import *
+from sd35_metrics import write_metrics_summary
 
 def variant_targets(variant):
     insertion = {
@@ -264,6 +265,11 @@ def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKE
     all_outputs = [Path(row["output_path"]) for row in manifest_rows]
     if write_manifest_file:
         write_manifest(manifest_rows, OUTPUT_DIR)
+    metrics_json_path, metrics_csv_path, metrics_summary = write_metrics_summary(
+        manifest_rows,
+        reject_histogram=reject_histogram,
+        output_dir=Path(OUTPUT_DIR),
+    )
     accepted = len(all_outputs)
     rejected = sum(reject_histogram.values())
     retried = sum(int(row.get("retry_attempts") or 0) for row in manifest_rows)
@@ -280,6 +286,7 @@ def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKE
     print(f"  seamless_clone_used_count: {seamless_clone_used_count}")
     print(f"  fallback_alpha_paste_count: {fallback_alpha_paste_count}")
     print(f"  reject reasons histogram: {reject_histogram}")
+    print(f"  metrics summary: {metrics_json_path}")
     if total_jobs:
         estimated_before_scale_correction_accepts = max(0, accepted - scale_corrected_count)
         print(f"  accept rate before scale correction (estimated): {estimated_before_scale_correction_accepts / total_jobs:.3f}")
@@ -296,6 +303,9 @@ def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKE
         "rejected": rejected,
         "accept_rate": accepted / total_jobs if total_jobs else 0.0,
         "reject_histogram": reject_histogram,
+        "metrics_summary": metrics_summary,
+        "metrics_summary_json": str(metrics_json_path),
+        "metrics_summary_csv": str(metrics_csv_path),
     }
     if return_manifest_rows:
         return all_outputs, manifest_rows
