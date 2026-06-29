@@ -35,4 +35,4 @@ docs/report/*.synctex.gz
 docs/report/*.fls
 docs/report/*.fdb_latexmk
 docs/report/*.toc
-docs/report/*.pdf
+
