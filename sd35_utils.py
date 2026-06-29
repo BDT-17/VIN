@@ -31,7 +31,6 @@ from sd35_config import *
 from sd35_data import ImageRecord
 
 SEMANTIC_SEGMENTER = None
-MOT_GT_CACHE = {}
 SEMANTIC_MASK_CACHE = {}
 
 def load_source_image(path):
@@ -130,18 +129,6 @@ def bbox_intersection_area(a, b):
     return max(0, min(ax2, bx2) - max(ax1, bx1)) * max(0, min(ay2, by2) - max(ay1, by1))
 
 
-def bbox_overlap_ratios(a, b):
-    inter = bbox_intersection_area(a, b)
-    area_a = max(1.0, bbox_area(a))
-    area_b = max(1.0, bbox_area(b))
-    return {
-        "intersection": inter,
-        "a": inter / area_a,
-        "b": inter / area_b,
-        "min": inter / min(area_a, area_b),
-    }
-
-
 def union_bboxes(bboxes):
     if not bboxes:
         return None
@@ -163,10 +150,12 @@ def mask_bbox_touches_border(mask_bbox, size, margin=PERSON_BORDER_REJECT_PIXELS
 
 def person_overlap_depth_ok(front_bbox, occluded_bbox):
     """Allow overlap only when the occluded person is plausibly behind the pasted one."""
-    overlap = bbox_overlap_ratios(front_bbox, occluded_bbox)
-    if overlap["intersection"] <= 0:
+    inter = bbox_intersection_area(front_bbox, occluded_bbox)
+    if inter <= 0:
         return True, 0.0
-    overlap_ratio = overlap["min"]
+    front_area = max(1.0, bbox_area(front_bbox))
+    occluded_area = max(1.0, bbox_area(occluded_bbox))
+    overlap_ratio = inter / min(front_area, occluded_area)
     if not ALLOW_PERSON_PERSON_OVERLAP:
         return False, overlap_ratio
     if overlap_ratio > MAX_PERSON_PERSON_OVERLAP_RATIO:
@@ -175,11 +164,13 @@ def person_overlap_depth_ok(front_bbox, occluded_bbox):
     occluded_h = max(1.0, occluded_bbox[3] - occluded_bbox[1])
     front_foot_y = float(front_bbox[3])
     occluded_foot_y = float(occluded_bbox[3])
-    if front_h < occluded_h * PERSON_OVERLAP_MIN_FRONT_HEIGHT_RATIO:
+    if front_h <= occluded_h:
         return False, overlap_ratio
     if occluded_h > front_h * OCCLUDED_PERSON_MAX_HEIGHT_RATIO:
         return False, overlap_ratio
-    if front_foot_y + OCCLUDED_PERSON_MAX_FOOT_Y_DELTA < occluded_foot_y:
+    if front_foot_y < occluded_foot_y - OCCLUDED_PERSON_MAX_FOOT_Y_DELTA:
+        return False, overlap_ratio
+    if occluded_foot_y > front_foot_y + OCCLUDED_PERSON_MAX_FOOT_Y_DELTA:
         return False, overlap_ratio
     return True, overlap_ratio
 
@@ -235,137 +226,12 @@ def load_yolo_bboxes_for_crop(record, original_size, class_ids, resolution=RESOL
     return bboxes
 
 
-def mot_gt_path_for_record(record):
-    record_path = Path(record.path)
-    for parent in [record_path.parent, *record_path.parents]:
-        if parent.name.lower() == "img1":
-            gt_path = parent.parent / "gt" / "gt.txt"
-            if gt_path.exists():
-                return gt_path
-    if record.label_path:
-        label_path = Path(record.label_path)
-        if label_path.name.lower() == "gt.txt":
-            return label_path
-        if label_path.is_dir() and (label_path / "gt.txt").exists():
-            return label_path / "gt.txt"
-    return None
-
-
-def mot_frame_number_from_path(path):
-    try:
-        return int(Path(path).stem)
-    except ValueError:
-        return None
-
-
-def mot_bbox_to_crop_bbox(left, top, width, height, original_size, resolution=RESOLUTION):
-    scale, crop_left, crop_top = center_crop_geometry(original_size, resolution)
-    crop_bbox = (
-        left * scale - crop_left,
-        top * scale - crop_top,
-        (left + width) * scale - crop_left,
-        (top + height) * scale - crop_top,
-    )
-    if crop_bbox[2] <= 0 or crop_bbox[0] >= resolution or crop_bbox[3] <= 0 or crop_bbox[1] >= resolution:
-        return None
-    clamped = clamp_bbox(crop_bbox, resolution, resolution)
-    return clamped if bbox_area(clamped) > 0 else None
-
-
-def load_mot_gt_by_frame(gt_path):
-    gt_path = Path(gt_path)
-    cache_key = str(gt_path.resolve())
-    if cache_key in MOT_GT_CACHE:
-        return MOT_GT_CACHE[cache_key]
-    by_frame = {}
-    with gt_path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            parts = [part.strip() for part in line.strip().split(",")]
-            if len(parts) < 6:
-                continue
-            try:
-                frame = int(float(parts[0]))
-                left, top, box_w, box_h = [float(value) for value in parts[2:6]]
-                conf = float(parts[6]) if len(parts) > 6 and parts[6] != "" else 1.0
-                class_id = int(float(parts[7])) if len(parts) > 7 and parts[7] != "" else 1
-            except ValueError:
-                continue
-            if conf <= 0 or class_id != 1 or box_w <= 0 or box_h <= 0:
-                continue
-            by_frame.setdefault(frame, []).append((left, top, box_w, box_h))
-    MOT_GT_CACHE[cache_key] = by_frame
-    return by_frame
-
-
-def load_mot_person_bboxes_for_crop(record, original_size, resolution=RESOLUTION):
-    gt_path = mot_gt_path_for_record(record)
-    frame = mot_frame_number_from_path(record.path)
-    if gt_path is None or frame is None:
-        return []
-    bboxes = []
-    for left, top, box_w, box_h in load_mot_gt_by_frame(gt_path).get(frame, []):
-        bbox = mot_bbox_to_crop_bbox(left, top, box_w, box_h, original_size, resolution=resolution)
-        if bbox:
-            bboxes.append(bbox)
-    return bboxes
-
-
 def load_person_bboxes_for_crop(record, original_size, resolution=RESOLUTION):
-    bboxes = load_yolo_bboxes_for_crop(record, original_size, PATCH_PERSON_CLASS_IDS, resolution=resolution)
-    return bboxes or load_mot_person_bboxes_for_crop(record, original_size, resolution=resolution)
+    return load_yolo_bboxes_for_crop(record, original_size, PATCH_PERSON_CLASS_IDS, resolution=resolution)
 
 
 def load_vehicle_bboxes_for_crop(record, original_size, resolution=RESOLUTION):
     return load_yolo_bboxes_for_crop(record, original_size, PATCH_VEHICLE_CLASS_IDS, resolution=resolution)
-
-
-def _has_meta_params(module):
-    """True if any parameter or buffer is still on the `meta` device."""
-    for t in list(module.parameters()) + list(module.buffers()):
-        if getattr(t, "is_meta", False) or t.device.type == "meta":
-            return True
-    return False
-
-
-def _materialize_on_cpu(model, model_id):
-    """Force a (possibly meta-device) SegFormer onto real CPU tensors.
-
-    Why CPU and not GPU: the segmenter is a module-global shared by BOTH device
-    shards in the 2-GPU parallel runner.  A GPU-resident model bound to cuda:0
-    but fed cuda:1 inputs by the second shard causes a CUDA illegal-memory-access
-    crash.  CPU keeps it device-neutral and contention-free (SegFormer-b0 is
-    tiny, so CPU inference cost is negligible).
-
-    Why this dance: on some Kaggle transformers/accelerate versions the weights
-    load on the `meta` device, and a plain ``.to("cpu")`` then raises "Cannot
-    copy out of meta tensor".  ``to_empty`` rebuilds storage on CPU (but zeros
-    it), so we reload the real pretrained values via ``load_state_dict`` from a
-    freshly materialized reference (``assign=True`` keeps those tensors).
-    """
-    if not _has_meta_params(model):
-        return model
-    ref = AutoModelForSemanticSegmentation.from_pretrained(
-        model_id, low_cpu_mem_usage=False, torch_dtype=torch.float32
-    )
-    if _has_meta_params(ref):
-        # Reference itself is on meta — pull raw tensors from the checkpoint.
-        import os
-        from huggingface_hub import snapshot_download
-        from safetensors.torch import load_file as _load_safetensors
-        local_dir = snapshot_download(model_id, allow_patterns=["*.safetensors", "*.bin"])
-        state = {}
-        for fn in sorted(os.listdir(local_dir)):
-            p = os.path.join(local_dir, fn)
-            if fn.endswith(".safetensors"):
-                state.update(_load_safetensors(p, device="cpu"))
-            elif fn.endswith(".bin"):
-                state.update(torch.load(p, map_location="cpu"))
-    else:
-        state = ref.state_dict()
-    model = model.to_empty(device="cpu")
-    model.load_state_dict(state, strict=False, assign=True)
-    del ref
-    return model
 
 
 def load_semantic_segmenter(device=TRAIN_DEVICE):
@@ -390,31 +256,15 @@ def load_semantic_segmenter(device=TRAIN_DEVICE):
                 SEMANTIC_SEGMENTATION_MODEL_ID,
                 use_fast=False,
             )
-        # Load SegFormer and keep it on CPU (device-neutral, multi-GPU safe — it
-        # is a module-global shared by both device shards).  Work around the
-        # Kaggle transformers/accelerate meta-tensor bug:
-        #  - default load + .to("cpu")  -> "Cannot copy out of meta tensor"
-        #  - device_map="cpu"           -> loads, but leaves dispatched weights
-        #    reporting device `meta` at forward time -> "Tensor on device meta is
-        #    not on the expected device cpu!" (caught per-image -> masks None ->
-        #    100% bad_placement).
-        # Fix: low_cpu_mem_usage=False then _materialize_on_cpu() (to_empty +
-        # state_dict reload) only if weights are still on meta.
         segmentation_model = AutoModelForSemanticSegmentation.from_pretrained(
             SEMANTIC_SEGMENTATION_MODEL_ID,
             low_cpu_mem_usage=False,
-            torch_dtype=torch.float32,
-        )
-        segmentation_model = _materialize_on_cpu(
-            segmentation_model, SEMANTIC_SEGMENTATION_MODEL_ID
-        )
-        if _has_meta_params(segmentation_model):
-            raise RuntimeError("SegFormer still on meta device after load")
+        ).to("cpu")
         segmentation_model.eval()
         SEMANTIC_SEGMENTER = {
             "processor": image_processor,
             "model": segmentation_model,
-            "device": "cpu",  # device-neutral: shared safely across GPU shards
+            "device": "cpu",  # keep SegFormer off GPU; SD3.5 already owns the GPUs/offload state
         }
         print(f"Loaded SegFormer semantic placement model on CPU: {SEMANTIC_SEGMENTATION_MODEL_ID}")
     except Exception as exc:
@@ -440,10 +290,9 @@ def semantic_placement_masks(source, record, device=TRAIN_DEVICE):
     try:
         processor = segmenter["processor"]
         model = segmenter["model"]
-        seg_device = segmenter.get("device", "cpu")
         image = source.convert("RGB")
         inputs = processor(images=image, return_tensors="pt")
-        inputs = {key: value.to(seg_device) for key, value in inputs.items()}
+        inputs = {key: value.to("cpu") for key, value in inputs.items()}
         with torch.no_grad():
             outputs = model(**inputs)
         logits = torch.nn.functional.interpolate(
@@ -790,12 +639,7 @@ def candidate_insertion_score(candidate, existing_person_bboxes, existing_vehicl
             score -= INSERTION_OVERLAP_PENALTY * (vehicle_overlap_ratio - MAX_VEHICLE_OVERLAP_RATIO)
     elif vehicle_overlap_ratio > 0:
         score -= INSERTION_OVERLAP_PENALTY * vehicle_overlap_ratio
-    # REQUIRE_SEMANTIC_PLACEMENT only makes sense when the segmenter is actually
-    # usable. If it failed to load (SEMANTIC_SEGMENTER is False) every image gets
-    # semantic_masks=None, and enforcing the requirement would reject 100% of
-    # candidates ("bad_placement") even though the log says it fell back to V1.
-    # In that case, genuinely fall back to V1 scoring instead of hard-rejecting.
-    if REQUIRE_SEMANTIC_PLACEMENT and semantic_masks is None and SEMANTIC_SEGMENTER is not False:
+    if REQUIRE_SEMANTIC_PLACEMENT and semantic_masks is None:
         return -1e9
     if semantic_masks:
         valid_mask = semantic_masks.get("valid")
@@ -817,37 +661,6 @@ def candidate_insertion_score(candidate, existing_person_bboxes, existing_vehicl
         score += 0.45 * body_valid_score
         score -= SEMANTIC_AVOID_PENALTY * avoid_score
     return score
-
-
-def placement_rejection_reason(candidate, existing_person_bboxes, existing_vehicle_bboxes=None,
-                               semantic_masks=None, resolution=RESOLUTION):
-    """Return a short string explaining which hard gate kills `candidate`, or the
-    component scores when it merely scores below threshold.  Diagnostic only —
-    mirrors the gates in candidate_insertion_score.  Used by DEBUG_PLACEMENT."""
-    for bbox in existing_person_bboxes:
-        depth_ok, _ = person_overlap_depth_ok(candidate, bbox)
-        if not depth_ok:
-            return "person_overlap_depth"
-    if REQUIRE_SEMANTIC_PLACEMENT and semantic_masks is None and SEMANTIC_SEGMENTER is not False:
-        return "no_semantic_masks (segmenter on but produced no valid labels)"
-    if semantic_masks:
-        valid_mask = semantic_masks.get("valid")
-        avoid_mask = semantic_masks.get("avoid")
-        foot_bbox = foot_support_bbox(candidate)
-        foot = mask_coverage(valid_mask, foot_bbox)
-        foot_avoid = mask_coverage(avoid_mask, foot_bbox)
-        body_valid = mask_coverage(valid_mask, candidate)
-        avoid = mask_coverage(avoid_mask, candidate)
-        if foot < MIN_FOOT_SUPPORT:
-            return f"foot_support {foot:.2f} < MIN_FOOT_SUPPORT {MIN_FOOT_SUPPORT}"
-        if foot_avoid > MAX_FOOT_AVOID_SUPPORT:
-            return f"foot_avoid {foot_avoid:.2f} > MAX {MAX_FOOT_AVOID_SUPPORT}"
-        if REQUIRE_SEMANTIC_PLACEMENT and body_valid < MIN_BODY_VALID_SUPPORT:
-            return f"body_valid {body_valid:.2f} < MIN {MIN_BODY_VALID_SUPPORT}"
-        if REQUIRE_SEMANTIC_PLACEMENT and avoid > MAX_BODY_AVOID_SUPPORT:
-            return f"body_avoid {avoid:.2f} > MAX {MAX_BODY_AVOID_SUPPORT}"
-        return f"below_threshold (foot={foot:.2f} body_valid={body_valid:.2f} avoid={avoid:.2f})"
-    return "below_threshold (no semantic masks)"
 
 
 def ground_y_range_for_variant(variant, height):
@@ -901,8 +714,6 @@ def find_insertion_region(record, source, variant, rng, device=TRAIN_DEVICE, ret
     best_bbox = None
     best_score = -1e9
     best_meta = None
-    seen_best_candidate = None      # highest score, even if hard-rejected (for diag)
-    seen_best_score = -1e18
     for _ in range(PATCH_MAX_PLACEMENT_TRIES):
         ground_y = sample_ground_y_for_variant(variant, y_min, y_max, rng)
         candidate_x = rng.randint(INSERTION_EDGE_MARGIN, width - INSERTION_EDGE_MARGIN)
@@ -928,9 +739,6 @@ def find_insertion_region(record, source, variant, rng, device=TRAIN_DEVICE, ret
             resolution=width,
             placement_target=placement_target,
         )
-        if score > seen_best_score:
-            seen_best_score = score
-            seen_best_candidate = candidate
         if score > best_score:
             best_bbox = candidate
             best_score = score
@@ -944,19 +752,6 @@ def find_insertion_region(record, source, variant, rng, device=TRAIN_DEVICE, ret
                 "ground_y": ground_y,
             }
     if best_score <= MIN_ACCEPTED_PLACEMENT_SCORE:
-        if DEBUG_PLACEMENT and seen_best_candidate is not None:
-            has_valid = semantic_masks is not None and semantic_masks.get("valid") is not None
-            reason = placement_rejection_reason(
-                seen_best_candidate, existing_person_bboxes,
-                existing_vehicle_bboxes=existing_vehicle_bboxes,
-                semantic_masks=semantic_masks, resolution=width,
-            )
-            print(
-                f"[placement-debug] {record.path.name} / {variant}: "
-                f"best_score={seen_best_score:.3f} (need > {MIN_ACCEPTED_PLACEMENT_SCORE}) | "
-                f"semantic_valid={has_valid} | n_person={len(existing_person_bboxes)} | "
-                f"reason={reason}"
-            )
         best_bbox, best_meta = None, None
     if return_metadata:
         return best_bbox, best_meta

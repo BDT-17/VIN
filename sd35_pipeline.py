@@ -20,7 +20,7 @@ from typing import Optional
 
 import matplotlib.pyplot as plt
 import torch
-from PIL import Image, ImageOps, ImageDraw, ImageFilter, ImageChops, ImageEnhance
+from PIL import Image, ImageOps, ImageDraw, ImageFilter, ImageChops
 
 try:
     import cv2
@@ -180,13 +180,7 @@ def color_match_person_crop(source_crop, person_rgb, person_mask):
     arr = np.asarray(person_rgb.convert("RGB"), dtype=np.float32)
     corrected = (arr - gen_mean) * (src_std / gen_std) + src_mean
     corrected = np.clip(corrected, 0, 255)
-    alpha_3 = foreground_harmonization_alpha(
-        person_mask,
-        min(float(COLOR_MATCH_STRENGTH), 0.10),
-        core_alpha=0.0,
-        edge_erode=1,
-    )
-    blended = arr * (1.0 - alpha_3) + corrected * alpha_3
+    blended = arr * (1.0 - COLOR_MATCH_STRENGTH) + corrected * COLOR_MATCH_STRENGTH
     return Image.fromarray(np.clip(blended, 0, 255).astype(np.uint8), mode="RGB")
 
 
@@ -215,7 +209,7 @@ def match_person_texture_to_scene(source_crop, person_rgb, person_mask):
     softened = person_rgb.filter(ImageFilter.GaussianBlur(radius=blur_radius))
     arr = np.asarray(person_rgb.convert("RGB"), dtype=np.float32)
     soft = np.asarray(softened.convert("RGB"), dtype=np.float32)
-    alpha_3 = foreground_harmonization_alpha(person_mask, min(float(TEXTURE_MATCH_STRENGTH), 0.04), core_alpha=0.0, edge_erode=1)
+    alpha_3 = foreground_harmonization_alpha(person_mask, TEXTURE_MATCH_STRENGTH, core_alpha=0.03)
     matched = arr * (1.0 - alpha_3) + soft * alpha_3
     return Image.fromarray(np.clip(matched, 0, 255).astype(np.uint8), mode="RGB")
 
@@ -399,13 +393,13 @@ def apply_subtle_scene_tone_filter(source_crop, person_rgb, person_mask):
 def harmonize_person_to_scene(source_crop, person_rgb, person_mask):
     person_rgb = color_match_person_crop(source_crop, person_rgb, person_mask)
     person_rgb = match_person_texture_to_scene(source_crop, person_rgb, person_mask)
-    # Only the contour band is harmonized. The core remains generated-person pixels
-    # so clothing, limbs, and face/body contrast do not collapse into the background.
-    person_rgb = local_color_transfer(source_crop, person_rgb, person_mask, strength=0.08)
-    person_rgb = match_local_brightness(source_crop, person_rgb, person_mask, strength=0.10)
-    person_rgb = match_local_contrast(source_crop, person_rgb, person_mask, strength=0.06)
-    person_rgb = match_local_saturation(source_crop, person_rgb, person_mask, strength=0.05)
-    person_rgb = add_sensor_noise(source_crop, person_rgb, person_mask, strength=0.18)
+    # Keep harmonization mostly on the boundary. Strong core color matching made
+    # the generated person sink into the background and lose useful detail.
+    person_rgb = local_color_transfer(source_crop, person_rgb, person_mask, strength=0.22)
+    person_rgb = match_local_brightness(source_crop, person_rgb, person_mask, strength=0.28)
+    person_rgb = match_local_contrast(source_crop, person_rgb, person_mask, strength=0.18)
+    person_rgb = match_local_saturation(source_crop, person_rgb, person_mask, strength=0.14)
+    person_rgb = add_sensor_noise(source_crop, person_rgb, person_mask, strength=0.45)
     person_rgb = apply_subtle_scene_tone_filter(source_crop, person_rgb, person_mask)
     person_rgb = neutralize_person_edge_halo(source_crop, person_rgb, person_mask)
     person_rgb = soften_dark_person_edge(source_crop, person_rgb, person_mask)
@@ -478,7 +472,7 @@ def soften_dark_person_edge(source_crop, person_rgb, person_mask):
     luma = np.sum(arr * np.array([0.2126, 0.7152, 0.0722], dtype=np.float32).reshape(1, 1, 3), axis=2)
     bg_luma_map = np.sum(background_tone * np.array([0.2126, 0.7152, 0.0722], dtype=np.float32).reshape(1, 1, 3), axis=2)
     dark_edge_boost = np.clip((bg_luma_map - luma) / 95.0, 0.0, 0.35)
-    alpha = np.clip(edge * (0.04 + dark_edge_boost * 0.20), 0.0, 0.08)
+    alpha = np.clip(edge * (0.12 + dark_edge_boost * 0.45), 0.0, 0.24)
     alpha_3 = np.expand_dims(alpha, axis=2)
     softened = arr * (1.0 - alpha_3) + target * alpha_3
     return Image.fromarray(np.clip(softened, 0, 255).astype(np.uint8), mode="RGB")
@@ -493,7 +487,7 @@ def neutralize_person_edge_halo(source_crop, person_rgb, person_mask):
     filter_size = max(3, int(EDGE_HALO_WIDTH) * 2 + 1)
     dilated = np.asarray(hard.filter(ImageFilter.MaxFilter(filter_size)), dtype=np.float32) / 255.0
     outside_ring = np.clip(dilated - hard_arr, 0.0, 1.0)
-    edge_alpha = np.clip(outside_ring * min(float(EDGE_HALO_COLOR_MATCH_STRENGTH), 0.08), 0.0, 0.08)
+    edge_alpha = np.clip(outside_ring * EDGE_HALO_COLOR_MATCH_STRENGTH, 0.0, 1.0)
     edge_active = edge_alpha > 0.02
     if not np.any(edge_active):
         return person_rgb
@@ -687,31 +681,6 @@ def apply_addit_subject_guided_blend(source_crop, target_crop, person_mask, vari
     return Image.composite(target_crop.convert("RGB"), source_crop.convert("RGB"), blend_mask)
 
 
-def enhance_person_detail(person_rgb, person_mask):
-    if not PERSON_DETAIL_ENHANCE_ENABLED:
-        return person_rgb, {"person_detail_enhanced": False}
-    mask = person_mask.convert("L")
-    if mask.getbbox() is None:
-        return person_rgb, {"person_detail_enhanced": False}
-    hard = mask.point(lambda p: 255 if p >= PERSON_PASTE_HARD_THRESHOLD else 0)
-    erode_px = max(0, int(PERSON_DETAIL_CORE_ERODE))
-    core = hard.filter(ImageFilter.MinFilter(erode_px * 2 + 1)) if erode_px > 0 else hard
-    core = core.filter(ImageFilter.GaussianBlur(radius=0.45))
-    if core.getbbox() is None:
-        return person_rgb, {"person_detail_enhanced": False}
-
-    sharpness = max(1.0, float(PERSON_DETAIL_SHARPNESS_BOOST))
-    contrast = max(1.0, float(PERSON_DETAIL_CONTRAST_BOOST))
-    enhanced = ImageEnhance.Sharpness(person_rgb.convert("RGB")).enhance(sharpness)
-    enhanced = ImageEnhance.Contrast(enhanced).enhance(contrast)
-    result = Image.composite(enhanced, person_rgb.convert("RGB"), core)
-    return result, {
-        "person_detail_enhanced": True,
-        "person_detail_sharpness_boost": round(sharpness, 3),
-        "person_detail_contrast_boost": round(contrast, 3),
-    }
-
-
 def seamless_clone_person_crop(source_crop, person_rgb, person_mask):
     if not USE_SEAMLESS_CLONE or cv2 is None:
         return None, False
@@ -848,7 +817,6 @@ def paste_crop_person_to_original(source, generated_crop, person_mask_crop, crop
     person_mask, occlusion_crop, occlusion_meta = apply_foreground_occlusion_mask(person_mask, occlusion_mask, crop_bbox)
     source_crop = source.crop(crop_bbox).resize((crop_w, crop_h), Image.BICUBIC)
     person_rgb = harmonize_person_to_scene(source_crop, person_rgb, person_mask)
-    person_rgb, detail_meta = enhance_person_detail(person_rgb, person_mask)
     cloned_crop, seamless_used = seamless_clone_person_crop(source_crop, person_rgb, person_mask)
     result = source.copy()
     blend_meta = {
@@ -857,7 +825,6 @@ def paste_crop_person_to_original(source, generated_crop, person_mask_crop, crop
         "fallback_alpha_used": not bool(seamless_used),
         "foreground_preserved_after_seamless": False,
         "edge_local_bg_match_used": False,
-        **detail_meta,
         **occlusion_meta,
     }
     if seamless_used and cloned_crop is not None:
@@ -919,21 +886,6 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
 
     for attempt in range(max_retries + 1):
         attempt_seed = seed + attempt * 9973
-        if attempt > 0 and last_reject_reason in {"bad_placement", "low_affordance_score"}:
-            retry_bbox, retry_meta = find_insertion_region(
-                record,
-                source,
-                variant,
-                random.Random(attempt_seed + 131),
-                device=device,
-                return_metadata=True,
-                depth_map=depth_map,
-            )
-            if retry_bbox is not None:
-                planned_insert_bbox = tuple(int(round(v)) for v in retry_bbox)
-                planned_insert_meta = retry_meta or planned_insert_meta
-                generation_source = draw_person_guide_on_patch(crop_source, crop_bbox, planned_insert_bbox, variant)
-                mask_image = bbox_mask_for_bbox(crop_source.size, planned_insert_bbox, variant=variant, padding=4, blur=1)
         generator = torch.Generator(device=generator_device).manual_seed(attempt_seed)
         attempt_prompt, attempt_negative_prompt, attempt_strength, attempt_guidance, _attempt_margin = build_retry_config(
             prompt,
@@ -1053,7 +1005,6 @@ def generate_context_person_composite_with_pipe(pipe, source, record, variant, p
             "expected_person_width": (planned_insert_meta or {}).get("expected_person_width", insert_bbox[2] - insert_bbox[0]),
             "ground_y": (planned_insert_meta or {}).get("ground_y", insert_bbox[3]),
             "planned_insert_bbox": planned_insert_bbox,
-            "existing_person_bboxes": existing_person_bboxes,
             "img2img_first": True,
             "retry_attempts": attempt,
             **occlusion_meta,

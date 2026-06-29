@@ -3,22 +3,10 @@
 from pathlib import Path
 
 # User-facing settings: change these between runs.
-RUN_PRESET = "smoke"  # smoke | quality | batch
+RUN_PRESET = "batch"  # smoke | quality | batch
 
 USER_CONFIG = {
     "DATASET_ROOT_CANDIDATES": [
-        Path('/kaggle/input/datasets/kyoru4444/mot17-02-fcrnn/MOT17-02-FRCNN'),
-        Path('/kaggle/input/datasets/kyoru4444/mot17-02-fcrnn/MOT17-02-FRCNN/img1'),
-        Path('/kaggle/input/datasets/constantinwerner/human-detection-dataset/human detection dataset'),
-        Path('/kaggle/input/datasets/constantinwerner/human-detection-dataset/human detection dataset/0'),
-        Path('/kaggle/input/human-detection-dataset/human detection dataset'),
-        Path('/kaggle/input/human-detection-dataset/human detection dataset/0'),
-        Path('/kaggle/input/datasets/human-detection-dataset/human detection dataset'),
-        Path('/kaggle/input/datasets/human-detection-dataset/human detection dataset/0'),
-        Path('/kaggle/input/datasets/nguyenaabcxyzeric/cityperson'),
-        Path('/kaggle/input/datasets/nguyenaabcxyzeric/CityPerson'),
-        Path('/kaggle/input/datasets/nguyenaabcxyzeric/cityperson/test/images'),
-        Path('/kaggle/input/datasets/nguyenaabcxyzeric/CityPerson/test/images'),
         Path('/kaggle/input/datasets/muttahirulislam/citypersons-dataset-with-bg-image/yolo_dir/yolo_dir'),
         Path('/kaggle/input/citypersons-dataset-with-bg-image/yolo_dir/yolo_dir'),
         Path('/kaggle/input/citypersons-dataset-with-bg-image'),
@@ -129,7 +117,6 @@ PLACEMENT_CONFIG = {'BACKGROUND_PRESERVATION_MODE': 'context_person_composite',
  'MAX_PERSON_PERSON_OVERLAP_RATIO': 0.08,
  'OCCLUDED_PERSON_MAX_HEIGHT_RATIO': 0.68,
  'OCCLUDED_PERSON_MAX_FOOT_Y_DELTA': 0,
- 'PERSON_OVERLAP_MIN_FRONT_HEIGHT_RATIO': 1.18,
  'PERSON_OVERLAP_FRONT_LAYER_BONUS': 0.0,
  'MAX_VEHICLE_OVERLAP_RATIO': 0.22,
  'VEHICLE_OVERLAP_FRONT_LAYER_BONUS': 0.08,
@@ -157,24 +144,14 @@ PLACEMENT_CONFIG = {'BACKGROUND_PRESERVATION_MODE': 'context_person_composite',
                             'train',
                             'truck',
                             'wall'},
- # Semantic placement hard gates.
- #
- # Grounding is a FOOT property, not a body property: a pedestrian standing on a
- # sidewalk naturally has building/wall/sky BEHIND their torso and head, so the
- # body legitimately overlaps "avoid" classes. The old body-avoid gate
- # (MAX_BODY_AVOID_SUPPORT 0.16) therefore rejected normal placements — e.g.
- # "body_avoid 0.62 > MAX 0.3" with no one in the scene. We now gate only on the
- # FEET (must stand on road/sidewalk/terrain, not on a car/in the sky) and make
- # the body-avoid check effectively non-binding.
- 'MIN_FOOT_SUPPORT': 0.30,        # feet mostly on valid ground
- 'MAX_FOOT_AVOID_SUPPORT': 0.35,  # feet may clip a little non-ground
- 'MIN_BODY_VALID_SUPPORT': 0.04,  # a little valid ground under the body
- 'MAX_BODY_AVOID_SUPPORT': 0.97,  # body-over-building/sky is normal -> near-off
- 'REQUIRE_SEMANTIC_PLACEMENT': True,
- 'DEBUG_PLACEMENT': True,
- 'MIN_ACCEPTED_PLACEMENT_SCORE': 0.55,
+ 'MIN_FOOT_SUPPORT': 0.48,
+ 'MAX_FOOT_AVOID_SUPPORT': 0.05,
+ 'MIN_BODY_VALID_SUPPORT': 0.14,
+ 'MAX_BODY_AVOID_SUPPORT': 0.16,
+ 'REQUIRE_SEMANTIC_PLACEMENT': False,
+ 'MIN_ACCEPTED_PLACEMENT_SCORE': -1000.0,
  'SEMANTIC_FOOT_WEIGHT': 6.5,
- 'SEMANTIC_AVOID_PENALTY': 2.5}   # was 9.0 — soft nudge, not a near-veto
+ 'SEMANTIC_AVOID_PENALTY': 9.0}
 
 SCALE_CONFIG = {'PERSPECTIVE_SCALE_NEAR': 1.14,
  'PERSPECTIVE_SCALE_FAR': 0.50,
@@ -286,25 +263,21 @@ COMPOSITING_CONFIG = {'USE_SEAMLESS_CLONE': False,
  'PERSON_GENERATION_CONTEXT_DARKEN': 0.03,
  'INSERTION_GUIDE_ALPHA': 0.44,
  'INSERTION_GUIDE_BLUR': 0.25,
- 'CONTEXT_CROP_EXPAND': 2.8,
+ 'CONTEXT_CROP_EXPAND': 3.4,
  'CONTEXT_CROP_MIN_SIZE': 192,
  'CONTEXT_INPAINT_MASK_PADDING': 46,
  'COLOR_MATCH_PERSON_TO_SCENE': True,
  'COLOR_MATCH_STRENGTH': 0.45,
  'COLOR_MATCH_CONTEXT_PAD': 18,
- 'FOREGROUND_HARMONIZATION_CORE_ALPHA': 0.0,
- 'FOREGROUND_HARMONIZATION_EDGE_ERODE': 2,
+ 'FOREGROUND_HARMONIZATION_CORE_ALPHA': 0.02,
+ 'FOREGROUND_HARMONIZATION_EDGE_ERODE': 5,
  'TEXTURE_MATCH_PERSON_TO_SCENE': True,
  'TEXTURE_MATCH_STRENGTH': 0.06,
  'TEXTURE_MATCH_MIN_BLUR': 0.10,
  'TEXTURE_MATCH_MAX_BLUR': 0.28,
  'TEXTURE_MATCH_CONTEXT_PAD': 24,
- 'PERSON_DETAIL_ENHANCE_ENABLED': True,
- 'PERSON_DETAIL_SHARPNESS_BOOST': 1.45,
- 'PERSON_DETAIL_CONTRAST_BOOST': 1.12,
- 'PERSON_DETAIL_CORE_ERODE': 1,
  'EDGE_HALO_NEUTRALIZE': True,
- 'EDGE_HALO_COLOR_MATCH_STRENGTH': 0.08,
+ 'EDGE_HALO_COLOR_MATCH_STRENGTH': 0.18,
  'EDGE_HALO_WIDTH': 1,
  'EDGE_HALO_MIN_ALPHA': 0.16,
  'EDGE_HALO_MAX_ALPHA': 0.72,
@@ -371,26 +344,11 @@ DEBUG_CONFIG = {'DEBUG_SCALE_VISUALIZATION': False}
 
 EDGE_HARMONIZATION_CONFIG = {
  'EDGE_HARMONIZATION_ENABLED': True,
- 'EDGE_FEATHER_RADIUS': 1,
- 'EDGE_BLUR_RADIUS': 0.20,
- 'EDGE_COLOR_MATCH_STRENGTH': 0.06,
- 'EDGE_BAND_WIDTH': 1,
+ 'EDGE_FEATHER_RADIUS': 2,
+ 'EDGE_BLUR_RADIUS': 0.4,
+ 'EDGE_COLOR_MATCH_STRENGTH': 0.08,
+ 'EDGE_BAND_WIDTH': 3,
  'POISSON_BLEND_ENABLED': False,
-}
-
-AFFORDANCE_CONFIG = {
- 'AFFORDANCE_SCORE_WEIGHTS': {'placement': 0.4, 'scale': 0.4, 'occlusion': 0.2},
- 'MIN_PLACEMENT_SCORE': 0.45,
- 'MIN_SCALE_SCORE': 0.50,
- 'MIN_OCCLUSION_SCORE': 0.40,
- 'MIN_AFFORDANCE_SCORE': 0.55,
- 'AFFORDANCE_PLACEMENT_TOLERANCE_PIXELS': 54,
- 'AFFORDANCE_PLACEMENT_TOLERANCE_RATIO': 0.10,
- 'AFFORDANCE_PLACEMENT_BAND_MARGIN': 0.10,
- 'AFFORDANCE_MIN_VISIBLE_RATIO': 0.18,
- 'AFFORDANCE_MAX_REASONABLE_OVERLAP': 0.24,
- 'AFFORDANCE_BORDER_TRUNCATION_PENALTY': 0.35,
- 'AFFORDANCE_REJECT_ON_TOTAL_SCORE': True,
 }
 
 ADDIT_CONFIG = {
@@ -417,7 +375,6 @@ CONFIG_GROUPS = [
     GENERATION_CONFIG,
     DEBUG_CONFIG,
     EDGE_HARMONIZATION_CONFIG,
-    AFFORDANCE_CONFIG,
     ADDIT_CONFIG,
 ]
 
@@ -446,35 +403,10 @@ def looks_like_roboflow_citypersons_root(path):
     )
 
 
-def looks_like_mot_sequence_root(path):
-    path = Path(path)
-    return (path / "img1").exists() and ((path / "gt").exists() or (path / "det").exists())
-
-
-def normalize_dataset_root_candidate(path):
-    path = Path(path)
-    candidates = [path]
-    if path.name == "img1":
-        candidates.append(path.parent)
-    if path.name == "images" and path.parent.name in {"train", "valid", "val", "test"}:
-        candidates.append(path.parent.parent)
-    if path.name in {"train", "valid", "val", "test"}:
-        candidates.append(path.parent)
-    for parent in path.parents:
-        if parent.name.lower() in {"cityperson", "citypersons"}:
-            candidates.append(parent)
-            break
-    for candidate in candidates:
-        if looks_like_roboflow_citypersons_root(candidate) or looks_like_mot_sequence_root(candidate):
-            return candidate
-    return path
-
-
 def resolve_dataset_root(candidates):
     for path in candidates:
-        root = normalize_dataset_root_candidate(path)
-        if looks_like_roboflow_citypersons_root(root) or looks_like_mot_sequence_root(root):
-            return Path(root)
+        if looks_like_roboflow_citypersons_root(path):
+            return Path(path)
     kaggle_input = Path("/kaggle/input")
     if kaggle_input.exists():
         for path in sorted(kaggle_input.rglob("data.yaml")):
@@ -486,24 +418,17 @@ def resolve_dataset_root(candidates):
 
 # Derived paths.
 DATASET_ROOT = resolve_dataset_root(DATASET_ROOT_CANDIDATES)
+VALID_SPLIT_NAME = "valid" if (DATASET_ROOT / "valid" / "images").exists() else "val"
 IMAGE_ROOT = DATASET_ROOT
 LABEL_ROOT = DATASET_ROOT
-if looks_like_mot_sequence_root(DATASET_ROOT):
-    VALID_SPLIT_NAME = "test"
-    DATASET_SPLIT_DIRS = {"test": DATASET_ROOT / "img1"}
-    LABEL_SPLIT_DIRS = {"test": DATASET_ROOT / "gt"}
-else:
-    VALID_SPLIT_NAME = "valid" if (DATASET_ROOT / "valid" / "images").exists() else "val"
-    DATASET_SPLIT_DIRS = {
-        "train": DATASET_ROOT / "train" / "images",
-        "val": DATASET_ROOT / VALID_SPLIT_NAME / "images",
-        "test": DATASET_ROOT / "test" / "images",
-    }
-    LABEL_SPLIT_DIRS = {
-        "train": DATASET_ROOT / "train" / "labels",
-        "val": DATASET_ROOT / VALID_SPLIT_NAME / "labels",
-        "test": DATASET_ROOT / "test" / "labels",
-    }
+DATASET_SPLIT_DIRS = {
+    "train": DATASET_ROOT / "train" / "images",
+    "val": DATASET_ROOT / VALID_SPLIT_NAME / "images",
+}
+LABEL_SPLIT_DIRS = {
+    "train": DATASET_ROOT / "train" / "labels",
+    "val": DATASET_ROOT / VALID_SPLIT_NAME / "labels",
+}
 METRICS_DIR = Path("/kaggle/working/metrics")
 METRICS_CSV_PATH = METRICS_DIR / "augmentation_metrics.csv"
 METRICS_SUMMARY_PATH = METRICS_DIR / "augmentation_metrics_summary.csv"
@@ -513,11 +438,7 @@ EDGE_DEBUG_DIR = OUTPUT_DIR / "edge_harmonization_debug"
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 BASE_CAPTION = "urban street photo"
-PRESERVATION_PROMPT = (
-    "Insert one realistic opaque full-body street pedestrian with head, torso, arms, legs, "
-    "clothing and shoes. Match scene perspective, nearby pedestrian scale, lighting and traffic-camera realism. "
-    "Preserve road, vehicles, buildings and background. No ghost, silhouette, outline, transparency or oversized human."
-)
+PRESERVATION_PROMPT = "clear full body, separated silhouette, grounded feet, natural scale"
 
 SCENE_PROMPTS = {
     "urban_pedestrian_scene": "urban street photo",
@@ -532,12 +453,7 @@ VARIANT_PROMPTS = {
     "add_near_pedestrian": "near larger full-body pedestrian",
 }
 
-NEGATIVE_PROMPT = (
-    "ghost person, transparent human, translucent body, semi-transparent pedestrian, shadow person, "
-    "silhouette, outline drawing, wireframe human, invisible body, floating limbs, partial body, "
-    "missing legs, missing arms, cropped person, faceless person, dark blob, black silhouette, "
-    "faded pedestrian, giant, closeup, floating, bad perspective, hard seam, merged people, fused bodies"
-)
+NEGATIVE_PROMPT = "cropped, missing head, missing legs, thin body, giant, closeup, floating, ghost, bad perspective, hard seam, overlap, merged people, fused bodies"
 
 
 def ensure_output_dirs():

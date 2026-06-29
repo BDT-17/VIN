@@ -12,6 +12,7 @@ import re
 import statistics
 import time
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
@@ -32,7 +33,6 @@ from sd35_utils import *
 from sd35_model import *
 from sd35_evaluation import *
 from sd35_pipeline import *
-from sd35_metrics import write_metrics_summary
 
 def variant_targets(variant):
     insertion = {
@@ -51,7 +51,6 @@ def write_manifest(rows, output_dir=OUTPUT_DIR):
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "split", "bucket", "source_context", "source_timeofday", "source_scene",
-        "accepted",
         "target_insertion", "target_timeofday", "original_path", "augmented_path",
         "comparison_path", "variant", "strength", "guidance_scale", "num_inference_steps",
         "generation_mode", "insert_bbox", "patch_bbox", "patch_debug_path",
@@ -62,16 +61,9 @@ def write_manifest(rows, output_dir=OUTPUT_DIR):
         "scale_correction_status", "seamless_clone_used", "fallback_alpha_paste",
         "fallback_alpha_used", "foreground_occlusion_used", "foreground_occluder_count",
         "foreground_occlusion_overlap_ratio", "foreground_occlusion_removed_ratio",
-        "final_person_person_overlap_ratio",
         "person_score", "scale_score", "background_score", "edge_score", "quality_score",
-        "placement_score", "occlusion_score", "affordance_score",
-        "actual_height", "scale_relative_error", "foot_y_error",
-        "visible_ratio", "overlap_ratio", "truncation_ratio",
-        "valid_grounding", "placement_band_valid", "scale_valid", "occlusion_valid",
-        "affordance_valid", "affordance_available", "affordance_warning",
         "edge_contrast_score", "boundary_laplacian_score", "mask_feather_radius",
-        "edge_harmonization_applied", "person_detail_enhanced", "person_detail_sharpness_boost",
-        "person_detail_contrast_boost", "contact_shadow_applied", "edge_harmonization_debug_path",
+        "edge_harmonization_applied", "contact_shadow_applied", "edge_harmonization_debug_path",
         "retry_attempts", "last_reject_reason", "reject_reason",
         "seed", "source_path", "label_path", "output_path",
     ]
@@ -145,28 +137,6 @@ def run_augmentation_jobs_on_device(device, jobs, total_jobs, backend):
             reason = normalize_reject_reason(exc)
             local_reject_reasons[reason] = local_reject_reasons.get(reason, 0) + 1
             print(f"[{device}] rejected {record.path.name} / {job['variant']}: {exc}")
-            rows.append({
-                "split": record.split,
-                "bucket": record.bucket,
-                "source_context": record.scene or "urban",
-                "source_timeofday": record.timeofday or "",
-                "source_scene": record.scene or "",
-                "accepted": False,
-                "target_insertion": target_insertion,
-                "target_timeofday": target_timeofday,
-                "original_path": str(record.path),
-                "augmented_path": "",
-                "comparison_path": "",
-                "variant": job["variant"],
-                "generation_mode": BACKGROUND_PRESERVATION_MODE,
-                "retry_attempts": CONTEXT_GENERATION_RETRIES,
-                "last_reject_reason": reason,
-                "reject_reason": reason,
-                "seed": job["seed"],
-                "source_path": str(record.path),
-                "label_path": str(record.label_path) if record.label_path else "",
-                "output_path": "",
-            })
             continue
         source_preview = resize_center_crop(load_source_image(record.path), resolution=RESOLUTION)
         augmented_preview = ImageOps.exif_transpose(Image.open(saved)).convert("RGB")
@@ -188,7 +158,6 @@ def run_augmentation_jobs_on_device(device, jobs, total_jobs, backend):
             "source_context": record.scene or "urban",
             "source_timeofday": record.timeofday or "",
             "source_scene": record.scene or "",
-            "accepted": True,
             "target_insertion": target_insertion,
             "target_timeofday": target_timeofday,
             "original_path": str(record.path),
@@ -221,35 +190,15 @@ def run_augmentation_jobs_on_device(device, jobs, total_jobs, backend):
             "foreground_occluder_count": generation_config.get("foreground_occluder_count", 0),
             "foreground_occlusion_overlap_ratio": generation_config.get("foreground_occlusion_overlap_ratio", 0.0),
             "foreground_occlusion_removed_ratio": generation_config.get("foreground_occlusion_removed_ratio", 0.0),
-            "final_person_person_overlap_ratio": generation_config.get("final_person_person_overlap_ratio", 0.0),
             "person_score": generation_config.get("person_score", ""),
             "scale_score": generation_config.get("scale_score", ""),
             "background_score": generation_config.get("background_score", ""),
             "edge_score": generation_config.get("edge_score", ""),
             "quality_score": generation_config.get("quality_score", ""),
-            "placement_score": generation_config.get("placement_score", ""),
-            "occlusion_score": generation_config.get("occlusion_score", ""),
-            "affordance_score": generation_config.get("affordance_score", ""),
-            "actual_height": generation_config.get("actual_height", ""),
-            "scale_relative_error": generation_config.get("scale_relative_error", ""),
-            "foot_y_error": generation_config.get("foot_y_error", ""),
-            "visible_ratio": generation_config.get("visible_ratio", ""),
-            "overlap_ratio": generation_config.get("overlap_ratio", ""),
-            "truncation_ratio": generation_config.get("truncation_ratio", ""),
-            "valid_grounding": generation_config.get("valid_grounding", ""),
-            "placement_band_valid": generation_config.get("placement_band_valid", ""),
-            "scale_valid": generation_config.get("scale_valid", ""),
-            "occlusion_valid": generation_config.get("occlusion_valid", ""),
-            "affordance_valid": generation_config.get("affordance_valid", ""),
-            "affordance_available": generation_config.get("affordance_available", ""),
-            "affordance_warning": generation_config.get("affordance_warning", ""),
             "edge_contrast_score": generation_config.get("edge_contrast_score", ""),
             "boundary_laplacian_score": generation_config.get("boundary_laplacian_score", ""),
             "mask_feather_radius": generation_config.get("mask_feather_radius", ""),
             "edge_harmonization_applied": generation_config.get("edge_harmonization_applied", False),
-            "person_detail_enhanced": generation_config.get("person_detail_enhanced", False),
-            "person_detail_sharpness_boost": generation_config.get("person_detail_sharpness_boost", ""),
-            "person_detail_contrast_boost": generation_config.get("person_detail_contrast_boost", ""),
             "contact_shadow_applied": generation_config.get("contact_shadow_applied", False),
             "edge_harmonization_debug_path": generation_config.get("edge_harmonization_debug_path", ""),
             "retry_attempts": generation_config.get("retry_attempts", 0),
@@ -269,30 +218,13 @@ def run_augmentation_jobs_on_device(device, jobs, total_jobs, backend):
 
 
 def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKEND, target_per_bucket=AUGMENTATIONS_PER_BUCKET, target_splits=TARGET_SPLITS, write_manifest_file=True, return_manifest_rows=False):
-    global LAST_MANIFEST_ROWS, LAST_REJECT_HISTOGRAM, LAST_AUGMENTATION_SUMMARY
-    _forbidden = [s for s in (target_splits or []) if s in ("test", "val", "valid")]
-    if _forbidden:
-        raise ValueError(
-            f"Benchmark contamination gate: target_splits contains {_forbidden}. "
-            "Augmentation must only run on 'train' splits. "
-            "If this is intentional research, set TARGET_SPLITS explicitly and remove this check."
-        )
     if not records:
         raise FileNotFoundError("No images found. Mount dataset folder and rerun scan_dataset().")
     devices = resolve_augmentation_devices()
     jobs = build_augmentation_jobs(records, variants, target_per_bucket, target_splits)
     if not jobs:
         print("No augmentation jobs were queued.")
-        LAST_MANIFEST_ROWS = []
-        LAST_REJECT_HISTOGRAM = {}
-        LAST_AUGMENTATION_SUMMARY = {
-            "total_jobs": 0,
-            "accepted": 0,
-            "rejected": 0,
-            "accept_rate": 0.0,
-            "reject_histogram": {},
-        }
-        return ([], []) if return_manifest_rows else []
+        return []
     total_jobs = len(jobs)
     print(f"Using augmentation devices: {devices}")
     shards = [jobs[index::len(devices)] for index in range(len(devices))]
@@ -303,24 +235,25 @@ def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKE
     shard_summary = ", ".join(f"{device}:{len(shard)}" for device, shard in active_shards)
     print(f"Device job split: {shard_summary}")
 
-    # Run shards SEQUENTIALLY, one device at a time.  Threaded multi-GPU in a
-    # single process is unsafe here: torch.cuda.set_device() is process-global
-    # (not thread-local), so two shard threads racing set_device(cuda:0) /
-    # set_device(cuda:1) issue kernels under the wrong current-device, and
-    # shared module-globals (e.g. the depth/segmenter caches) get touched from
-    # the wrong context — which surfaced as "CUDA error: an illegal memory
-    # access" that corrupts the context and kills both shards.  Each shard
-    # tears its pipeline down (del pipe; clear_cuda) before the next starts, so
-    # only one device is active at a time.  The smoke throughput cost is small.
-    device_results = []
-    for device, shard in active_shards:
-        if len(active_shards) > 1:
-            print(f"[{device}] running shard of {len(shard)} jobs (sequential multi-GPU)")
-        try:
-            device_results.append(run_augmentation_jobs_on_device(device, shard, total_jobs, backend))
-        except Exception as exc:
-            print(f"[{device}] shard failed: {type(exc).__name__}: {exc}")
-            raise
+    if len(active_shards) == 1:
+        device, shard = active_shards[0]
+        device_results = [run_augmentation_jobs_on_device(device, shard, total_jobs, backend)]
+    else:
+        max_workers = len(active_shards)
+        print(f"Running {max_workers} augmentation shards in parallel.")
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_device = {
+                executor.submit(run_augmentation_jobs_on_device, device, shard, total_jobs, backend): device
+                for device, shard in active_shards
+            }
+            device_results = []
+            for future in as_completed(future_to_device):
+                device = future_to_device[future]
+                try:
+                    device_results.append(future.result())
+                except Exception as exc:
+                    print(f"[{device}] shard failed: {type(exc).__name__}: {exc}")
+                    raise
 
     for outputs, rows, device_rejects in device_results:
         all_outputs.extend(outputs)
@@ -328,15 +261,9 @@ def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKE
         for reason, count in device_rejects.items():
             reject_histogram[reason] = reject_histogram.get(reason, 0) + count
     manifest_rows = sorted(manifest_rows, key=lambda row: row["seed"])
-    accepted_rows = [row for row in manifest_rows if str(row.get("accepted", True)).lower() == "true" and row.get("output_path")]
-    all_outputs = [Path(row["output_path"]) for row in accepted_rows]
+    all_outputs = [Path(row["output_path"]) for row in manifest_rows]
     if write_manifest_file:
         write_manifest(manifest_rows, OUTPUT_DIR)
-    metrics_json_path, metrics_csv_path, metrics_summary = write_metrics_summary(
-        manifest_rows,
-        reject_histogram=reject_histogram,
-        output_dir=Path(OUTPUT_DIR),
-    )
     accepted = len(all_outputs)
     rejected = sum(reject_histogram.values())
     retried = sum(int(row.get("retry_attempts") or 0) for row in manifest_rows)
@@ -353,7 +280,6 @@ def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKE
     print(f"  seamless_clone_used_count: {seamless_clone_used_count}")
     print(f"  fallback_alpha_paste_count: {fallback_alpha_paste_count}")
     print(f"  reject reasons histogram: {reject_histogram}")
-    print(f"  metrics summary: {metrics_json_path}")
     if total_jobs:
         estimated_before_scale_correction_accepts = max(0, accepted - scale_corrected_count)
         print(f"  accept rate before scale correction (estimated): {estimated_before_scale_correction_accepts / total_jobs:.3f}")
@@ -361,6 +287,7 @@ def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKE
         if accepted:
             print(f"  scale correction share of accepted: {scale_corrected_count / accepted:.3f}")
             print(f"  seamless clone success rate: {seamless_clone_used_count / accepted:.3f}")
+    global LAST_MANIFEST_ROWS, LAST_REJECT_HISTOGRAM, LAST_AUGMENTATION_SUMMARY
     LAST_MANIFEST_ROWS = manifest_rows
     LAST_REJECT_HISTOGRAM = reject_histogram
     LAST_AUGMENTATION_SUMMARY = {
@@ -369,9 +296,6 @@ def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKE
         "rejected": rejected,
         "accept_rate": accepted / total_jobs if total_jobs else 0.0,
         "reject_histogram": reject_histogram,
-        "metrics_summary": metrics_summary,
-        "metrics_summary_json": str(metrics_json_path),
-        "metrics_summary_csv": str(metrics_csv_path),
     }
     if return_manifest_rows:
         return all_outputs, manifest_rows
@@ -404,29 +328,12 @@ def summarize_quality_rows(rows):
     def values(key):
         return np.array([float(row.get(key, 0.0) or 0.0) for row in accepted_rows], dtype=np.float32)
 
-    def values_non_null(key):
-        vals = [row.get(key) for row in accepted_rows if row.get(key) is not None]
-        return np.array([float(v) for v in vals], dtype=np.float32)
-
     summary = {"count": len(accepted_rows)}
-    for key in ("person_score", "background_score", "edge_score", "quality_score"):
+    for key in ("person_score", "scale_score", "background_score", "edge_score", "quality_score"):
         arr = values(key)
         short = key.replace("_score", "")
         summary[f"{short}_mean"] = round(float(arr.mean()), 4)
         summary[f"{short}_p10"] = round(float(np.percentile(arr, 10)), 4)
-
-    # scale_score: exclude None (unavailable) samples from mean; report coverage separately
-    _scale_arr = values_non_null("scale_score")
-    _scale_total = len(accepted_rows)
-    _scale_available = len(_scale_arr)
-    summary["scale_coverage_rate"] = round(_scale_available / _scale_total, 4) if _scale_total else 0.0
-    if _scale_available:
-        summary["scale_mean"] = round(float(_scale_arr.mean()), 4)
-        summary["scale_p10"] = round(float(np.percentile(_scale_arr, 10)), 4)
-    else:
-        summary["scale_mean"] = None
-        summary["scale_p10"] = None
-
     return summary
 
 
@@ -677,7 +584,7 @@ def reset_runtime_config():
 # Run this cell, then call reset_runtime_config() whenever you want to undo runtime autotune changes.
 
 def run_smoke(records, smoke_images=10, smoke_splits=None):
-    smoke_splits = smoke_splits or TARGET_SPLITS
+    smoke_splits = smoke_splits or ["train"]
     generated_paths, manifest_rows = augment_dataset(
         records,
         variants=AUGMENTATION_VARIANTS,
@@ -689,86 +596,14 @@ def run_smoke(records, smoke_images=10, smoke_splits=None):
     return generated_paths, manifest_rows, autotune_report
 
 
-def _default_export_roots():
-    working_dir = Path("/kaggle/working")
-    roots = [Path(OUTPUT_DIR), Path(METRICS_DIR), Path(AUTOTUNE_SETTINGS.get("snapshot_dir", working_dir / "autotune_snapshots"))]
-    if working_dir.exists():
-        for path in sorted(working_dir.iterdir()):
-            if not path.is_dir():
-                continue
-            if path.name.startswith(("sd35_", "addit_")) or path.name.endswith(("_augmented", "_export")):
-                roots.append(path)
-    unique_roots = []
-    seen = set()
-    for root in roots:
-        root = Path(root)
-        if not root.exists() or not root.is_dir():
-            continue
-        key = str(root.resolve())
-        if key in seen:
-            continue
-        seen.add(key)
-        unique_roots.append(root)
-    return unique_roots
-
-
-def _zip_directory(root, zip_path):
-    import zipfile
-
-    root = Path(root)
-    zip_path = Path(zip_path)
-    if zip_path.exists():
-        zip_path.unlink()
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for file_path in sorted(root.rglob("*")):
-            if not file_path.is_file():
-                continue
-            archive.write(file_path, Path(root.name) / file_path.relative_to(root))
-    return zip_path
-
-
-def _zip_directory_bundle(roots, zip_path):
-    import zipfile
-
-    zip_path = Path(zip_path)
-    if zip_path.exists():
-        zip_path.unlink()
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for root in roots:
-            root = Path(root)
-            for file_path in sorted(root.rglob("*")):
-                if not file_path.is_file():
-                    continue
-                archive.write(file_path, Path(root.name) / file_path.relative_to(root))
-    return zip_path
-
-
-def export_outputs(output_roots=None, export_base=None, extra_zip_roots=None):
-    export_base = Path(export_base or "/kaggle/working/sd35_all_datasets_augmented_export")
-    export_zip = export_base.with_suffix(".zip")
-    if export_zip.exists():
-        export_zip.unlink()
-
-    roots = [Path(path) for path in (output_roots or _default_export_roots())]
-    roots = [root for root in roots if root.exists() and root.is_dir()]
-    if not roots:
-        raise FileNotFoundError("No output directories found to export.")
-
-    _zip_directory_bundle(roots, export_zip)
-
-    extra_zip_roots = [Path("/kaggle/working/sd35_smoke")] if extra_zip_roots is None else [Path(path) for path in extra_zip_roots]
-    extra_zips = []
-    for root in extra_zip_roots:
-        if root.exists() and root.is_dir():
-            extra_zips.append(_zip_directory(root, root.with_suffix(".zip")))
-
-    print("Exported output directories:")
-    for root in roots:
-        print(f"  - {root}")
-    print(f"Saved export: {export_zip}")
-    for zip_path in extra_zips:
-        print(f"Saved extra export: {zip_path}")
-    return export_zip
+def export_outputs():
+    import shutil
+    export_base = Path("/kaggle/working/sd35_citypersons_augmented_export")
+    if export_base.with_suffix(".zip").exists():
+        export_base.with_suffix(".zip").unlink()
+    shutil.make_archive(str(export_base), "zip", str(OUTPUT_DIR))
+    print(f"Saved export: {export_base.with_suffix('.zip')}")
+    return export_base.with_suffix(".zip")
 
 
 if __name__ == "__main__":
