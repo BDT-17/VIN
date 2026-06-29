@@ -39,7 +39,15 @@ class SD35ConceptRunner:
             raise FileNotFoundError(f"LoRA not found: {lora_file}")
         self.pipe.load_lora_weights(str(self.adapter_dir),
                                     weight_name="pytorch_lora_weights.safetensors")
-        self.pipe.to(self.device)
+        # The FULL SD3.5 pipeline (transformer + VAE + 3 text encoders incl. the
+        # ~10GB T5-XXL) does NOT fit resident on a 16GB T4 — a plain pipe.to("cuda")
+        # OOMs. CPU offload keeps only ONE component on the GPU at a time (text
+        # encoders, then transformer, then VAE), so peak VRAM ~= the largest single
+        # module and the convenient pipe(prompt) path still works.
+        if self.device == "cuda" and torch.cuda.is_available():
+            self.pipe.enable_model_cpu_offload()
+        else:
+            self.pipe.to(self.device)
         self.pipe.vae.enable_slicing()
         return self
 
