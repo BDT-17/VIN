@@ -52,6 +52,7 @@
 % ---- house macros ----------------------------------------------------------
 \newcommand{\TODO}[1]{{\color{red}\textbf{[TODO: #1]}}}
 \newcommand{\modelname}{\textsc{VIN-Insert}\xspace}  % rename to your method
+\newcommand{\rgp}{Rule-Guided SD3.5 Pipeline\xspace}  % the V5 baseline flow
 \newcommand{\complexity}[1]{\mathcal{O}\!\left(#1\right)}
 \newcommand{\eg}{e.g.\@\xspace}
 \newcommand{\ie}{i.e.\@\xspace}
@@ -141,8 +142,8 @@ comparison exists.
 This report studies a background-as-source-of-truth architecture in which
 the original image is the trusted scene and generated background pixels are
 discarded. We compare two insertion flows built on Stable Diffusion~3.5
-Medium - (i)~a context--object composite augmenter (\textsc{V5}) and (ii)~a
-concept LoRA followed by segment-and-paste (\textsc{LoRA}) - under
+Medium - (i)~a context--object composite augmenter (\rgp, the baseline) and
+(ii)~a concept LoRA followed by segment-and-paste (\textsc{LoRA}) - under
 a single shared, dependency-injected metric core, so the two become directly
 comparable for the first time. The central design choice is to make background
 preservation a structural property - both flows return the
@@ -151,7 +152,7 @@ behaviour the generator is merely asked to respect.
 
 % --- One paragraph: headline quantitative results ---
 On 3 dataset, the golden set pairs/images is  PIPE Dataset, the strongest \modelname flow
-(the V5 composite main pipeline) attains a background-preservation \bgmae of
+(the \rgp baseline) attains a background-preservation \bgmae of
 \TODO{value} and \bgssim of \TODO{value} at an object-inclusion rate of
 \TODO{value}, while \TODO{the headline comparison vs.\ the strongest baseline}.
 A controlled single-variable ablation isolates \TODO{the key design choice},
@@ -197,7 +198,7 @@ something the pipeline guarantees by construction.
   \centering
   \includegraphics[width=\textwidth]{Images/teaser_v5.png}
   \caption[Teaser]{One source image, one inserted pedestrian, and the
-  source-to-composite difference map for the V5 segment-and-composite flow
+  source-to-composite difference map for the \rgp segment-and-composite flow
   (CityPersons \texttt{aachen\_000139}, \texttt{add\_occluded\_pedestrian}).
   The difference (right; blue\,$=$\,0, warmer\,$=$\,larger) is confined to the
   inserted-object region: outside it the mean per-pixel RGB difference is
@@ -276,7 +277,7 @@ The principal contributions of this report are:
         incomparable pipelines report the same numbers and can be paired
         case-by-case.
   \item \textbf{An empirical two-flow comparison on SD3.5.} We instantiate the
-        architecture as a composite augmenter (V5) and a concept LoRA with
+        architecture as a composite augmenter (the \rgp baseline) and a concept LoRA with
         segment-and-paste, and compare them on the shared core. \TODO{one line on
         what the comparison shows once measured.}
   \item \textbf{A controlled ablation isolating \TODO{the key design choice}.} A
@@ -310,7 +311,7 @@ validation thresholds.
   \item Can object insertion preserve the background by construction
         (segment-and-composite) rather than by prompting, across diverse scenes?
   \item Does a concept LoRA, trained to generate people and then segment-and-paste
-        them, integrate objects better than the prompt-driven V5 augmenter, once
+        them, integrate objects better than the prompt-driven \rgp baseline, once
         both are reduced to the same segment-and-paste preservation guarantee?
   \item What is the quality--cost trade-off across the two flows - what does
         each added component (training, scale correction, validation) buy
@@ -507,13 +508,13 @@ the ETL run.}
   \end{tabular}
 \end{table}
 
-\subsection{Flow A - Context--object composite (\textsc{V5})}\label{sec:v5}
-\textsc{V5} treats the MM-DiT backbone (\cref{sec:backbone}) as a black-box
+\subsection{Flow A - Rule-Guided SD3.5 Pipeline (Baseline)}\label{sec:v5}
+The \rgp (Baseline) treats the MM-DiT backbone (\cref{sec:backbone}) as a black-box
 img2img candidate generator and places all background-preservation
 logic outside it. The motivating observation is architectural rather than
 empirical: because rectified-flow denoising (\cref{eq:rf}) can in principle move
 any latent token, no prompt or guidance setting guarantees that pixels
-outside the intended object stay fixed - so \textsc{V5} never asks the model to
+outside the intended object stay fixed - so \rgp never asks the model to
 preserve them. Instead it generates a candidate, segments only the new
 object, discards the generated background, and composites the object onto the
 untouched source. The original image is the source of truth; generated
@@ -549,7 +550,7 @@ checks; weak samples are rejected and regenerated under a bounded budget rather
 than saved.
 
 \paragraph{Quality score and safety gate.}
-\textsc{V5} keeps a fused quality score as a flow-specific extension (not part of
+\rgp keeps a fused quality score as a flow-specific extension (not part of
 the shared core of \cref{sec:metrics}):
 \begin{equation}\label{eq:v5score}
   Q = 0.45\,s_{\text{obj}} + 0.25\,s_{\text{scale}}
@@ -591,7 +592,7 @@ is set to \texttt{train} only. \Cref{fig:v5arch} draws the staged flow of
     \draw[flowarr] (h.west) to[out=180,in=180]
           node[left,font=\footnotesize]{retry} (d.west);
   \end{tikzpicture}
-  \caption[V5 insertion architecture]{The \textsc{V5} context--object composite
+  \caption[Rule-Guided SD3.5 Pipeline architecture]{The \rgp context--object composite
   flow of \cref{eq:v5} (re-drawn from \texttt{docs/diagram.md}). The blue
   original background is the trusted source: it is composited under the
   segmented object and is the reference for the background-preservation check, so
@@ -607,7 +608,7 @@ is set to \texttt{train} only. \Cref{fig:v5arch} draws the staged flow of
 \emph{which pixels to keep} (enforced by construction at paste time). The
 current flow takes the simpler of the two paths - it learns to \emph{generate}
 people, not to \emph{edit} a given scene - and then recovers the background by the
-same segment-and-composite principle as \textsc{V5}.
+same segment-and-composite principle as \rgp.
 \textbf{Implementation note:} an earlier mask-free \emph{edit} LoRA conditioned the
 denoiser on a source latent (an InstructPix2Pix-style~\cite{ip2p} image path with
 a trainable input projection and two-scale CFG) was prototyped but retired; the
@@ -707,10 +708,10 @@ detector callable). The shared set is component-only (no fused score):
         expected height; \texttt{None} (not a false~1.0) when no prior exists.
   \item \textbf{Background preservation} - \bgmae / \bgssim over pixels
         outside the object region, where the region is taken from
-        (priority order) an explicit mask (LoRA), an explicit bbox (V5), or the
+        (priority order) an explicit mask (LoRA), an explicit bbox (\rgp), or the
         detector boxes.
 \end{itemize}
-Each flow retains its own metrics as extensions (V5: affordance/placement;
+Each flow retains its own metrics as extensions (\rgp: affordance/placement;
 LoRA: \textsc{edge\_seam}, \textsc{outside\_mask\_*}).
 Cross-flow comparison pairs rows by $(\text{case\_id},\text{seed})$ via
 \texttt{paired\_shared} and reports per-metric means, deltas, and a direction-aware
@@ -757,7 +758,7 @@ and which is the controlled counterpart.}
 \subsection{Quantitative comparison}\label{sec:quant}
 \Cref{tab:main} reports the shared metrics per flow on the frozen eval set, paired
 by $(\text{case\_id},\text{seed})$. By construction both segment-and-composite flows
-(V5, LoRA) are expected to dominate \bgmae / \bgssim, because their background
+(\rgp, LoRA) are expected to dominate \bgmae / \bgssim, because their background
 pixels are copied rather than denoised; any residual \bgmae for them reflects only
 the object-region accounting and the compositing boundary, not scene drift. The
 question the table answers is how the two compare on inclusion, person
@@ -777,8 +778,8 @@ the trade-offs; \textbf{bold} the best per column.}
     Incl.$\,\uparrow$ & \textsc{p\_conf}$\,\uparrow$ &
     \textsc{sc\_err}$\,\downarrow$ \\
     \midrule
-    V5 (composite)       & -- & -- & -- & -- & -- \\
-    LoRA (segment-paste) & -- & -- & -- & -- & -- \\
+    Rule-Guided SD3.5 (baseline) & -- & -- & -- & -- & -- \\
+    LoRA (segment-paste)         & -- & -- & -- & -- & -- \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -808,7 +809,7 @@ size of the effect, and whether it trades preservation against inclusion.}
 \subsection{Computational efficiency}\label{sec:efficiency}
 We compare runtime and peak VRAM per case across both flows on the T4 16\,GB
 reference hardware. The expected ordering follows from where each flow spends
-compute: V5 pays for placement, scale correction, validation, and bounded retry,
+compute: the \rgp baseline pays for placement, scale correction, validation, and bounded retry,
 and the LoRA flow pays a one-off training cost in exchange for cheaper inference.
 \TODO{fill measured runtime/VRAM per case; be explicit about which numbers are
 MEASURED on this hardware versus indicative references collated from papers/code,
@@ -827,7 +828,7 @@ the specific cases.}
   \centering
   \fbox{\parbox[c][3.5cm][c]{0.9\textwidth}{\centering\TODO{qualitative grid:
   one row per flow, columns original / generated / composite / bg-diff.}}}
-  \caption[Qualitative comparison]{One row per flow (V5, LoRA), columns
+  \caption[Qualitative comparison]{One row per flow (\rgp, LoRA), columns
   original / generated / composite / background-difference, on the same
   source cases. The difference map is near-zero outside the object for both
   segment-and-composite flows. \TODO{name the case ids and the specific visual
@@ -841,7 +842,7 @@ preservation can be made structural (RQ1): the segment-and-composite flows
 return the background unchanged because those pixels are copied, not denoised, so
 their residual \bgmae reflects only object-region accounting, not scene drift.
 Whether the learned concept LoRA integrates objects better than the
-generation-driven V5 augmenter once both are reduced to the same paste step
+generation-driven \rgp baseline once both are reduced to the same paste step
 (RQ2), and what each component costs (RQ3), are answered by \cref{tab:main} and
 \cref{sec:efficiency} once measured.
 
@@ -858,7 +859,7 @@ This report studied a background-as-source-of-truth architecture for
 object-insertion augmentation, in which the original image is trusted and generated
 background is discarded, together with a single dependency-injected metric core
 that makes two otherwise incomparable insertion flows - a composite augmenter
-(V5) and a concept LoRA with segment-and-paste - report the same numbers on the
+(the \rgp baseline) and a concept LoRA with segment-and-paste - report the same numbers on the
 same cases. The
 contribution is therefore as much methodological (comparability) as architectural
 (structural preservation). \TODO{state the headline result and the quantified
@@ -877,7 +878,7 @@ metrics.
 Every reported number is intended to be regenerable from the saved configuration.
 The LoRA flow is driven by \texttt{LoRA/configs/*.yaml} and the notebooks
 \texttt{concept\_01\_all\_in\_one.ipynb} (train) and
-\texttt{concept\_02\_segment\_paste.ipynb} (apply); the V5 flow is driven by its
+\texttt{concept\_02\_segment\_paste.ipynb} (apply); the \rgp baseline is driven by its
 \texttt{RUN\_PRESET} and \texttt{PARAMETER\_OVERRIDES} in the clean augmentation
 notebook. Each run writes a provenance record, and for research runs the autotune
 stays in \texttt{dry\_run} so nothing changes silently. \TODO{state the exact repo
