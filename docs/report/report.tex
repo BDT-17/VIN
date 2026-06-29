@@ -888,28 +888,61 @@ numbers.}
 % ============================================================================
 \bibliographystyle{ieeetr}
 \bibliography{references}
-% Or inline if you prefer not to use BibTeX:
-% \begin{thebibliography}{99}
-%   \bibitem{addit} Y. Tewel et al., ``Add-it: Training-Free Object Insertion
-%     in Images with Pretrained Diffusion Models,'' ICLR 2025, arXiv:2411.07232.
-%   \bibitem{sd3} \TODO{SD3.5 reference.}
-%   \bibitem{pipe} \TODO{PIPE / Paint-by-Inpaint reference.}
-%   \bibitem{citypersons} \TODO{CityPersons reference.}
-% \end{thebibliography}
 
 % ============================================================================
 \appendix
 \section{Layer-by-layer model specification}\label{app:arch}
-\TODO{Per-flow component spec table (input shape, layers, params) for the only
-trained component - the rank-$8$ attention LoRA adapter. Match the sample's
-appendix Table 7/8 style.}
+The only trained component is a LoRA adapter on the attention projections of the
+SD3.5 MM-DiT backbone; everything else (VAE, the three text encoders, and the
+MM-DiT weights) is frozen and used as released. The adapter (\cref{tab:arch})
+injects a low-rank update $\Delta W = BA$ with rank $r=16$ into the attention
+\texttt{to\_q}/\texttt{to\_k}/\texttt{to\_v}/\texttt{to\_out} projections of each
+\texttt{JointTransformerBlock}; the base projection weights are untouched.
+
+\begin{table}[h]
+  \centering
+  \caption[Trained-component specification]{The single trained component (the
+  attention LoRA). Frozen modules are listed for completeness.}
+  \label{tab:arch}
+  \begin{tabular}{@{}lll@{}}
+    \toprule
+    \textbf{Component} & \textbf{Role} & \textbf{Trained?} \\
+    \midrule
+    VAE encoder/decoder        & image $\leftrightarrow$ 16-ch latent & frozen \\
+    CLIP-L / CLIP-G / T5-XXL    & text conditioning (T5 droppable)     & frozen \\
+    MM-DiT base weights         & denoiser backbone                    & frozen \\
+    Attention LoRA ($r{=}16$)   & low-rank $\Delta W$ on \texttt{q/k/v/out} & \textbf{trained} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 \section{Training configuration}\label{app:train}
-The LoRA flow is trained under the repository's T4-16\,GB defaults: SD3.5 Medium,
-$512$\,px, FP16, batch size $1$, gradient accumulation $4$, gradient
-checkpointing, 8-bit Adam, frozen text encoders, and a rank-$8$ LoRA on the
-attention layers (concept text$\to$image; no image-conditioning projection).
-\TODO{confirm the exact learning rate and step count against the training config
-and provenance, and add the training-config table.}
+The concept LoRA is trained under the repository's T4-16\,GB defaults
+(\cref{tab:train}): a rank-$16$ LoRA on the attention layers only (concept
+text$\to$image; no image-conditioning projection), with the MM-DiT backbone and
+the three text encoders frozen and text embeddings precomputed to disk so the
+encoders can be dropped during the run. Optimisation follows the SD3
+rectified-flow objective with \texttt{logit\_normal} timestep weighting.
+
+\begin{table}[h]
+  \centering
+  \caption[Training configuration]{Concept-LoRA training configuration
+  (\texttt{LoRA/configs/concept\_lora\_train.yaml}).}
+  \label{tab:train}
+  \begin{tabular}{@{}ll@{}}
+    \toprule
+    \textbf{Setting} & \textbf{Value} \\
+    \midrule
+    Backbone              & SD3.5 Medium (bf16 compute, fp32 trainable) \\
+    Trained params        & attention LoRA, rank $16$ \\
+    Resolution            & $512\times512$ \\
+    Learning rate         & $1\times10^{-4}$ \\
+    Max train steps       & $4000$ (checkpoint every $500$) \\
+    Gradient accumulation & $4$ (effective batch $4$) \\
+    Timestep weighting    & \texttt{logit\_normal} \\
+    Train samples         & $4000$ PIPE person images \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 \end{document}
