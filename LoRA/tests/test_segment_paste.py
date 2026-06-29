@@ -71,6 +71,19 @@ def test_color_match_pulls_toward_background():
     assert a[35, 32][0] < 200
 
 
+def test_erode_tightens_cut_and_drops_boundary():
+    """erode_px shrinks the mask inward, so the silhouette's outer ring reverts to
+    the original background (no YOLO halo carried over) while the interior stays."""
+    orig, gen, mask = _frames()   # person rect rows 20..49, cols 25..39
+    out, info = composite_persons(
+        orig, gen, [{"mask": mask, "bbox_xyxy": [25, 20, 40, 50], "conf": 0.9}],
+        feather_px=0, erode_px=3, color_match=0.0)
+    a = np.asarray(out)
+    assert info["pasted"] == 1
+    assert tuple(a[20, 25]) == (120, 120, 120)   # original corner pixel eroded away -> bg
+    assert a[35, 32][0] > a[35, 32][1]           # interior still the generated person
+
+
 def test_generate_and_paste_concept_uses_generation_and_preserves_bg():
     """The concept variant: runner.generate (no source) -> segment -> paste.
 

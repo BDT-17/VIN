@@ -50,6 +50,21 @@ def _feather(mask_bool: np.ndarray, px: int) -> np.ndarray:
     return np.asarray(a, dtype=np.float32) / 255.0
 
 
+def _erode(mask_bool: np.ndarray, px: int) -> np.ndarray:
+    """Shrink the mask inward by ``px`` (morphological erosion via PIL MinFilter).
+
+    YOLO person masks usually include a thin ring of background pixels around the
+    silhouette; eroding a pixel or two pulls the cut strictly INSIDE the person so
+    no background halo is carried over — the "chặt" (tight) half of a clean cut.
+    """
+    if px <= 0:
+        return mask_bool
+    from PIL import Image, ImageFilter
+    m = Image.fromarray((mask_bool.astype(np.uint8) * 255))
+    m = m.filter(ImageFilter.MinFilter(px * 2 + 1))
+    return np.asarray(m) > 127
+
+
 def _match_color(person_rgb, bg_rgb, alpha, strength=0.5):
     """Shift the person's per-channel mean/std toward the background region it
     will cover, so its colour/exposure sits in the original scene.
@@ -78,7 +93,8 @@ def composite_persons(
     original,
     generated,
     persons: List[Dict],
-    feather_px: int = 3,
+    feather_px: int = 2,
+    erode_px: int = 1,
     color_match: float = 0.5,
     min_conf: float = 0.25,
     min_area_frac: float = 0.001,
@@ -87,11 +103,15 @@ def composite_persons(
     """Paste segmented persons from ``generated`` onto ``original``.
 
     original / generated : path or PIL.Image. Resized to a common size (the
-        original's size) so masks align — the mask-free runner outputs square
+        original's size) so masks align — the concept runner outputs square
         ``resolution`` frames, so pass the original at that size or accept resize.
     persons : output of ``load_person_segmenter()(generated)`` — each has
         ``mask`` (HxW bool at generated's native size), ``bbox_xyxy``, ``conf``.
-    feather_px : Gaussian feather radius on the paste alpha (seam softness).
+    erode_px : shrink the mask inward this many px before feathering, so the cut
+        sits strictly inside the silhouette (drops the YOLO background halo —
+        a tighter, cleaner cut). 0 = no erosion.
+    feather_px : Gaussian feather radius on the paste alpha (seam softness). Keep
+        small for a crisp cut; 0 = hard edge (byte-exact seam).
     color_match : 0..1 reinhard colour transfer toward the covered background.
     min_conf / min_area_frac : drop low-confidence or tiny specks.
     poisson : if True and OpenCV is available, use seamlessClone for the largest
@@ -118,6 +138,7 @@ def composite_persons(
         if mask.shape != (H, W):                            # mask from generated's native size
             m_img = Image.fromarray((mask.astype("uint8") * 255)).resize((W, H))
             mask = np.asarray(m_img) > 127
+        mask = _erode(mask, erode_px)                       # tighten: drop bg halo
         alpha = _feather(mask, feather_px)[..., None]       # (H,W,1)
 
         person = gen_arr.copy()
@@ -164,7 +185,8 @@ def generate_and_paste_concept(
     num_inference_steps: int = 28,
     guidance_scale: float = 7.0,
     resolution: int = 512,
-    feather_px: int = 3,
+    feather_px: int = 2,
+    erode_px: int = 1,
     color_match: float = 0.5,
     poisson: bool = False,
 ):
@@ -197,6 +219,6 @@ def generate_and_paste_concept(
     persons = segmenter(generated)
     composite, info = composite_persons(
         orig, generated, persons,
-        feather_px=feather_px, color_match=color_match, poisson=poisson,
+        feather_px=feather_px, erode_px=erode_px, color_match=color_match, poisson=poisson,
     )
     return composite, generated, info

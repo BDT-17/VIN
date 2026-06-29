@@ -85,11 +85,15 @@ Standard SD3 flow-matching loss, LoRA rank 16 on attention, ONE artifact:
 
 1. `inference/sd35_concept_runner.py` loads base SD3.5 + LoRA and generates from a
    text prompt (`generate(prompt)`) — no source image.
-2. `person_detector.load_person_segmenter` (YOLOv8n-seg, COCO class 0) returns a
-   per-person `{mask, bbox, conf}` from the generated frame.
+2. `person_detector.load_person_segmenter` (YOLOv8-seg, COCO class 0) returns a
+   per-person `{mask, bbox, conf}` from the generated frame. For a clean cut it
+   uses `retina_masks=True` (native-resolution, crisp silhouette) — pick a larger
+   weight (`yolov8x-seg.pt`) for the sharpest masks.
 3. `segment_paste.composite_persons` pastes the person onto the original with a
-   feathered alpha + reinhard colour-match (optional OpenCV Poisson). The
-   background outside the person is preserved byte-exact.
+   feathered alpha + reinhard colour-match (optional OpenCV Poisson). `erode_px`
+   shrinks the mask inward to drop the YOLO background halo (a tighter cut);
+   `feather_px` keeps the seam soft (0 = hard/byte-exact). The background outside
+   the person is preserved byte-exact.
 
 `segment_paste.generate_and_paste_concept` runs all three for one image and
 returns `(composite, generated, info)` so an `original | generated | composite`

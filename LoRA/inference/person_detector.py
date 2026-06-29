@@ -108,7 +108,11 @@ def load_person_segmenter(
         model.to(device)
 
     def segment(image) -> List[Dict]:
-        res = model.predict(source=image, imgsz=imgsz, verbose=False, conf=conf_thr)
+        # retina_masks=True returns masks at the image's NATIVE resolution (not the
+        # low-res ~160px proto masks upsampled), giving a much crisper/cleaner
+        # person silhouette — the "cắt rõ" half of a clean cut.
+        res = model.predict(source=image, imgsz=imgsz, verbose=False, conf=conf_thr,
+                            retina_masks=True)
         out: List[Dict] = []
         for r in res:
             boxes = getattr(r, "boxes", None)
