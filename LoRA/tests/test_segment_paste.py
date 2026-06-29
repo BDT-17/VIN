@@ -69,3 +69,37 @@ def test_color_match_pulls_toward_background():
     # with full colour-match toward gray-120 bg, the pasted red is less saturated
     # than the raw generated red (200,30,30) — its red channel drops toward 120.
     assert a[35, 32][0] < 200
+
+
+def test_generate_and_paste_concept_uses_generation_and_preserves_bg():
+    """The concept variant: runner.generate (no source) -> segment -> paste.
+
+    A fake runner returns a fixed generated frame and a fake segmenter returns a
+    person mask, so the numpy compositor path is exercised end-to-end without torch.
+    """
+    from LoRA.inference.segment_paste import generate_and_paste_concept
+
+    orig, gen, mask = _frames()
+
+    class FakeRunner:
+        def __init__(self):
+            self.called_with = None
+
+        def generate(self, prompt, **kw):
+            self.called_with = (prompt, kw)
+            return gen  # the concept model's full generated frame
+
+    def fake_segmenter(image):
+        return [{"mask": mask, "bbox_xyxy": [25, 20, 40, 50], "conf": 0.9}]
+
+    runner = FakeRunner()
+    composite, generated, info = generate_and_paste_concept(
+        runner, orig, "a photo of a person", fake_segmenter,
+        feather_px=0, color_match=0.0)
+
+    # generation got the prompt (no source image passed — concept is blind to orig)
+    assert runner.called_with[0] == "a photo of a person"
+    assert info["pasted"] == 1
+    a = np.asarray(composite)
+    assert tuple(a[5, 5]) == (120, 120, 120)          # bg byte-exact outside person
+    assert a[35, 32][0] > a[35, 32][1]                # generated person inside

@@ -195,3 +195,51 @@ def generate_and_paste(
         feather_px=feather_px, color_match=color_match, poisson=poisson,
     )
     return composite, generated, info
+
+
+def generate_and_paste_concept(
+    runner,
+    original_img,
+    prompt,
+    segmenter,
+    seed: int = 42,
+    num_inference_steps: int = 28,
+    guidance_scale: float = 7.0,
+    resolution: int = 512,
+    feather_px: int = 3,
+    color_match: float = 0.5,
+    poisson: bool = False,
+):
+    """End-to-end one-image step for the CONCEPT (text->image) LoRA:
+    generate (from prompt only, NO source) -> segment person -> paste onto original.
+
+    Unlike ``generate_and_paste`` (mask-free EDIT runner, conditioned on the source
+    image), the concept runner does not see the original — it generates a person
+    in its own scene from the text prompt. We then segment that person and paste it
+    onto ``original_img``, so the original background is preserved (byte-exact
+    outside the person; the ``feather_px`` band blends the silhouette edge — set
+    ``feather_px=0`` for a strictly byte-exact background).
+
+    runner    : an SD35ConceptRunner (already loaded).
+    segmenter : load_person_segmenter() callable.
+
+    Returns (composited PIL.Image, generated PIL.Image, info). The placement/scale
+    of the person come from the generation (the concept model is blind to the
+    original), so use the prompt to steer a person that fits the target scene.
+    """
+    from PIL import Image
+    orig = original_img
+    if isinstance(orig, (str, Path)):
+        orig = Image.open(orig)
+    orig = orig.convert("RGB")
+
+    generated = runner.generate(
+        prompt, seed=seed, num_inference_steps=num_inference_steps,
+        guidance_scale=guidance_scale, resolution=resolution,
+    )
+    persons = segmenter(generated)
+    composite, info = composite_persons(
+        orig, generated, persons,
+        feather_px=feather_px, color_match=color_match, poisson=poisson,
+    )
+    return composite, generated, info

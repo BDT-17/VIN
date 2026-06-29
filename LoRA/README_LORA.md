@@ -1,6 +1,25 @@
 # LoRA flow
 
-> **Active direction — mask-free EDIT LoRA + segment-and-paste.** The goal is a
+> **Concept (text→image) LoRA — simplest flow.** If the goal is just "train one
+> model that learns to GENERATE images like the dataset" (no editing, no
+> background preservation), use the concept flow: a plain DreamBooth-style LoRA
+> trained on the PIPE `add a person` subset's *finished* photos (`target_img`).
+> No mask, no source image, no `input_proj`, no segment/paste — ONE artifact
+> (`pytorch_lora_weights.safetensors`) and inference is a straight `pipe(prompt)`.
+> Files: `train/train_concept_lora.py`, `train/concept_lora_dataset.py`,
+> `inference/sd35_concept_runner.py`, `inference/run_concept_eval.py`,
+> `configs/concept_lora_train.yaml`, `notebooks/concept_01_all_in_one.ipynb`.
+> The mask-free EDIT flow below is a separate, more complex direction.
+>
+> **Concept + segment-paste (100% bg preserve).** To add the generated person to a
+> real background while keeping the original byte-exact, `concept_02_segment_paste.ipynb`
+> reuses the YOLO-seg + composite step: the concept model generates a person (from
+> the prompt, blind to the original), YOLOv8-seg cuts it out, and it is pasted onto
+> the original (`segment_paste.generate_and_paste_concept`). Background outside the
+> person is byte-exact (set `feather_px=0` for a strictly byte-exact seam). The
+> person's placement/scale come from the generation — steer them with the prompt.
+
+> **Active direction (edit) — mask-free EDIT LoRA + segment-and-paste.** The goal is a
 > model that adds a person to a scene while preserving 100% of the original
 > background and matching the photo's vibe. Base SD3.5 already makes good
 > pedestrians, so a plain concept LoRA adds little; the value is in *edit*
@@ -64,6 +83,8 @@ Notebooks hold **no** ETL/train/eval logic — they only call `LoRA.data`,
 
 | Notebook | Purpose |
 |---|---|
+| `concept_01_all_in_one.ipynb` | **Concept (text→image) LoRA**: train on PIPE person photos → generate → contact sheet. |
+| `concept_02_segment_paste.ipynb` | **Concept inference**: load a trained concept adapter → generate → YOLO-seg → paste person into the original (100% bg preserved). |
 | `data_01_build_lora_release.ipynb` | Build the LoRA dataset release via the ETL pipeline. |
 | `maskfree_01_all_in_one.ipynb` | Train the mask-free edit LoRA on PIPE pairs → eval → contact sheet. |
 | `maskfree_03_segment_paste.ipynb` | Load a trained adapter → generate → YOLO-seg → paste into the original. |
