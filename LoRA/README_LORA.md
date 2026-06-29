@@ -70,7 +70,7 @@ LoRA/
     parsers/{yolo,mot,classification}.py
   train/                     # train_maskfree_edit, maskfree_edit_dataset, spike, export_artifacts, provenance
   inference/                 # sd35_maskfree_runner, person_detector, segment_paste, inpaint_metrics, report
-  notebooks/                 # data_01, maskfree_01 (train), maskfree_03 (segment-paste test), spike_maskfree
+  notebooks/                 # concept_01 (train), concept_02 (segment-paste inference), data_01 (ETL)
   tests/
   vendor/diffusers/<commit>/train_dreambooth_lora_sd3.py   # pinned trainer
 ```
@@ -86,9 +86,10 @@ Notebooks hold **no** ETL/train/eval logic — they only call `LoRA.data`,
 | `concept_01_all_in_one.ipynb` | **Concept (text→image) LoRA**: train on PIPE person photos → generate → contact sheet. |
 | `concept_02_segment_paste.ipynb` | **Concept inference**: load a trained concept adapter → generate → YOLO-seg → paste person into the original (100% bg preserved). |
 | `data_01_build_lora_release.ipynb` | Build the LoRA dataset release via the ETL pipeline. |
-| `maskfree_01_all_in_one.ipynb` | Train the mask-free edit LoRA on PIPE pairs → eval → contact sheet. |
-| `maskfree_03_segment_paste.ipynb` | Load a trained adapter → generate → YOLO-seg → paste into the original. |
-| `spike_maskfree_conditioning.ipynb` | Single-pair overfit spike validating the 32→16 `input_proj` wiring. |
+
+The mask-free EDIT flow's notebooks were removed; its code remains (legacy) under
+`train/train_maskfree_edit.py`, `inference/sd35_maskfree_runner.py`, etc., runnable
+directly if that direction is revisited.
 
 ## A. Data ETL (`notebooks/data_01_build_lora_release.ipynb`)
 
@@ -108,7 +109,7 @@ Notebooks hold **no** ETL/train/eval logic — they only call `LoRA.data`,
 duplicate-cluster or group overlap between train/val, or any eval image/group
 leaking into the release.
 
-## B. Mask-free train (`notebooks/maskfree_01_all_in_one.ipynb`)
+## B. Mask-free train (legacy — `train/train_maskfree_edit.py`)
 
 Trains on **PIPE** ([`paint-by-inpaint/PIPE`](https://huggingface.co/datasets/paint-by-inpaint/PIPE)),
 which provides **real** before/after pairs: `source_img` is the object-erased
@@ -129,7 +130,7 @@ Run output (`models/<model_name>/run_NNN/`):
 `adapter/pytorch_lora_weights.safetensors` + `adapter/input_proj.pt` (BOTH
 required at inference), `training_provenance.json`, `checkpoints/`, etc.
 
-## C. Generate → segment → paste (`notebooks/maskfree_03_segment_paste.ipynb`)
+## C. Generate → segment → paste (legacy — `inference/sd35_maskfree_runner.py`)
 
 1. `inference/sd35_maskfree_runner.py` loads base SD3.5 + LoRA + `input_proj.pt`
    and runs the full denoise loop, reconstructing the edit conditioning each step
