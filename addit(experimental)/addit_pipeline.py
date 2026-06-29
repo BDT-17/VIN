@@ -96,6 +96,34 @@ def _module_device(module, fallback="cpu") -> torch.device:
         return torch.device(fallback)
 
 
+def _pipe_offload_enabled(pipe) -> bool:
+    """True when accelerate model/sequential CPU offload is active on the pipe.
+
+    Under offload, modules rest on CPU and accelerate hooks move them to the
+    execution device just-in-time; their static parameter device therefore
+    reports ``cpu`` even though forward runs on CUDA.
+    """
+    for name in ("_all_hooks", "_offload_gpu_id"):
+        if getattr(pipe, name, None):
+            return True
+    for comp in (getattr(pipe, "vae", None), getattr(pipe, "transformer", None)):
+        if comp is not None and hasattr(comp, "_hf_hook"):
+            return True
+    return False
+
+
+def _execution_device(pipe, fallback) -> torch.device:
+    """Device that hooked forwards actually run on (offload-aware).
+
+    Diffusers exposes ``_execution_device`` precisely for this; fall back to the
+    resting param device when it is unavailable.
+    """
+    dev = getattr(pipe, "_execution_device", None)
+    if dev is not None:
+        return torch.device(dev)
+    return torch.device(fallback)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Result container
 # ═══════════════════════════════════════════════════════════════════════════
@@ -142,8 +170,21 @@ class AddItPipeline:
 
         first_param = next(self.transformer.parameters())
         self.dtype = first_param.dtype
-        self.transformer_device = torch.device(device or first_param.device)
-        self.vae_device = _module_device(self.vae, fallback=str(self.transformer_device))
+
+        # Under accelerate CPU offload the modules rest on CPU and are moved to
+        # the GPU by hooks at forward time, so their static param device reports
+        # "cpu". Feeding VAE/transformer inputs to that resting device then
+        # collides with the just-in-time-moved weights ("weight is on cuda:0,
+        # ... other tensors on cpu"). Use the pipeline's execution device for I/O
+        # tensors when offload is active; otherwise keep the resting devices.
+        self._offload = _pipe_offload_enabled(self.pipe)
+        if self._offload:
+            exec_dev = _execution_device(self.pipe, fallback=device or first_param.device)
+            self.transformer_device = torch.device(device) if device else exec_dev
+            self.vae_device = exec_dev
+        else:
+            self.transformer_device = torch.device(device or first_param.device)
+            self.vae_device = _module_device(self.vae, fallback=str(self.transformer_device))
         self.device = self.transformer_device
 
         self.state = AddItState()
