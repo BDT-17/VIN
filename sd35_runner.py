@@ -12,7 +12,6 @@ import re
 import statistics
 import time
 import warnings
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
@@ -304,25 +303,24 @@ def augment_dataset(records, variants=AUGMENTATION_VARIANTS, backend=MODEL_BACKE
     shard_summary = ", ".join(f"{device}:{len(shard)}" for device, shard in active_shards)
     print(f"Device job split: {shard_summary}")
 
-    if len(active_shards) == 1:
-        device, shard = active_shards[0]
-        device_results = [run_augmentation_jobs_on_device(device, shard, total_jobs, backend)]
-    else:
-        max_workers = len(active_shards)
-        print(f"Running {max_workers} augmentation shards in parallel.")
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_device = {
-                executor.submit(run_augmentation_jobs_on_device, device, shard, total_jobs, backend): device
-                for device, shard in active_shards
-            }
-            device_results = []
-            for future in as_completed(future_to_device):
-                device = future_to_device[future]
-                try:
-                    device_results.append(future.result())
-                except Exception as exc:
-                    print(f"[{device}] shard failed: {type(exc).__name__}: {exc}")
-                    raise
+    # Run shards SEQUENTIALLY, one device at a time.  Threaded multi-GPU in a
+    # single process is unsafe here: torch.cuda.set_device() is process-global
+    # (not thread-local), so two shard threads racing set_device(cuda:0) /
+    # set_device(cuda:1) issue kernels under the wrong current-device, and
+    # shared module-globals (e.g. the depth/segmenter caches) get touched from
+    # the wrong context — which surfaced as "CUDA error: an illegal memory
+    # access" that corrupts the context and kills both shards.  Each shard
+    # tears its pipeline down (del pipe; clear_cuda) before the next starts, so
+    # only one device is active at a time.  The smoke throughput cost is small.
+    device_results = []
+    for device, shard in active_shards:
+        if len(active_shards) > 1:
+            print(f"[{device}] running shard of {len(shard)} jobs (sequential multi-GPU)")
+        try:
+            device_results.append(run_augmentation_jobs_on_device(device, shard, total_jobs, backend))
+        except Exception as exc:
+            print(f"[{device}] shard failed: {type(exc).__name__}: {exc}")
+            raise
 
     for outputs, rows, device_rejects in device_results:
         all_outputs.extend(outputs)

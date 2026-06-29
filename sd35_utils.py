@@ -319,6 +319,55 @@ def load_vehicle_bboxes_for_crop(record, original_size, resolution=RESOLUTION):
     return load_yolo_bboxes_for_crop(record, original_size, PATCH_VEHICLE_CLASS_IDS, resolution=resolution)
 
 
+def _has_meta_params(module):
+    """True if any parameter or buffer is still on the `meta` device."""
+    for t in list(module.parameters()) + list(module.buffers()):
+        if getattr(t, "is_meta", False) or t.device.type == "meta":
+            return True
+    return False
+
+
+def _materialize_on_cpu(model, model_id):
+    """Force a (possibly meta-device) SegFormer onto real CPU tensors.
+
+    Why CPU and not GPU: the segmenter is a module-global shared by BOTH device
+    shards in the 2-GPU parallel runner.  A GPU-resident model bound to cuda:0
+    but fed cuda:1 inputs by the second shard causes a CUDA illegal-memory-access
+    crash.  CPU keeps it device-neutral and contention-free (SegFormer-b0 is
+    tiny, so CPU inference cost is negligible).
+
+    Why this dance: on some Kaggle transformers/accelerate versions the weights
+    load on the `meta` device, and a plain ``.to("cpu")`` then raises "Cannot
+    copy out of meta tensor".  ``to_empty`` rebuilds storage on CPU (but zeros
+    it), so we reload the real pretrained values via ``load_state_dict`` from a
+    freshly materialized reference (``assign=True`` keeps those tensors).
+    """
+    if not _has_meta_params(model):
+        return model
+    ref = AutoModelForSemanticSegmentation.from_pretrained(
+        model_id, low_cpu_mem_usage=False, torch_dtype=torch.float32
+    )
+    if _has_meta_params(ref):
+        # Reference itself is on meta — pull raw tensors from the checkpoint.
+        import os
+        from huggingface_hub import snapshot_download
+        from safetensors.torch import load_file as _load_safetensors
+        local_dir = snapshot_download(model_id, allow_patterns=["*.safetensors", "*.bin"])
+        state = {}
+        for fn in sorted(os.listdir(local_dir)):
+            p = os.path.join(local_dir, fn)
+            if fn.endswith(".safetensors"):
+                state.update(_load_safetensors(p, device="cpu"))
+            elif fn.endswith(".bin"):
+                state.update(torch.load(p, map_location="cpu"))
+    else:
+        state = ref.state_dict()
+    model = model.to_empty(device="cpu")
+    model.load_state_dict(state, strict=False, assign=True)
+    del ref
+    return model
+
+
 def load_semantic_segmenter(device=TRAIN_DEVICE):
     global SEMANTIC_SEGMENTER
     if not USE_SEMANTIC_PLACEMENT or SMART_PLACEMENT_VERSION != "v2":
@@ -341,33 +390,31 @@ def load_semantic_segmenter(device=TRAIN_DEVICE):
                 SEMANTIC_SEGMENTATION_MODEL_ID,
                 use_fast=False,
             )
-        # Load weights straight onto CPU. `low_cpu_mem_usage=False` was meant to
-        # avoid the accelerate offload path, but some accelerate/transformers
-        # combos still materialize weights on the `meta` device, so a later
-        # .to("cpu") raises "Cannot copy out of meta tensor". Passing an explicit
-        # device_map="cpu" makes from_pretrained place real weights on CPU itself
-        # (no post-hoc .to() move, no meta tensors). Do NOT use .to_empty() here:
-        # it would move only the module structure and drop the pretrained
-        # weights, yielding garbage segmentation masks.
-        try:
-            segmentation_model = AutoModelForSemanticSegmentation.from_pretrained(
-                SEMANTIC_SEGMENTATION_MODEL_ID,
-                torch_dtype=torch.float32,
-                device_map="cpu",
-            )
-        except (ValueError, TypeError):
-            # device_map needs accelerate; fall back to the explicit two-step
-            # load when it is unavailable.
-            segmentation_model = AutoModelForSemanticSegmentation.from_pretrained(
-                SEMANTIC_SEGMENTATION_MODEL_ID,
-                low_cpu_mem_usage=False,
-                torch_dtype=torch.float32,
-            ).to("cpu")
+        # Load SegFormer and keep it on CPU (device-neutral, multi-GPU safe — it
+        # is a module-global shared by both device shards).  Work around the
+        # Kaggle transformers/accelerate meta-tensor bug:
+        #  - default load + .to("cpu")  -> "Cannot copy out of meta tensor"
+        #  - device_map="cpu"           -> loads, but leaves dispatched weights
+        #    reporting device `meta` at forward time -> "Tensor on device meta is
+        #    not on the expected device cpu!" (caught per-image -> masks None ->
+        #    100% bad_placement).
+        # Fix: low_cpu_mem_usage=False then _materialize_on_cpu() (to_empty +
+        # state_dict reload) only if weights are still on meta.
+        segmentation_model = AutoModelForSemanticSegmentation.from_pretrained(
+            SEMANTIC_SEGMENTATION_MODEL_ID,
+            low_cpu_mem_usage=False,
+            torch_dtype=torch.float32,
+        )
+        segmentation_model = _materialize_on_cpu(
+            segmentation_model, SEMANTIC_SEGMENTATION_MODEL_ID
+        )
+        if _has_meta_params(segmentation_model):
+            raise RuntimeError("SegFormer still on meta device after load")
         segmentation_model.eval()
         SEMANTIC_SEGMENTER = {
             "processor": image_processor,
             "model": segmentation_model,
-            "device": "cpu",  # keep SegFormer off GPU; SD3.5 already owns the GPUs/offload state
+            "device": "cpu",  # device-neutral: shared safely across GPU shards
         }
         print(f"Loaded SegFormer semantic placement model on CPU: {SEMANTIC_SEGMENTATION_MODEL_ID}")
     except Exception as exc:
@@ -393,9 +440,10 @@ def semantic_placement_masks(source, record, device=TRAIN_DEVICE):
     try:
         processor = segmenter["processor"]
         model = segmenter["model"]
+        seg_device = segmenter.get("device", "cpu")
         image = source.convert("RGB")
         inputs = processor(images=image, return_tensors="pt")
-        inputs = {key: value.to("cpu") for key, value in inputs.items()}
+        inputs = {key: value.to(seg_device) for key, value in inputs.items()}
         with torch.no_grad():
             outputs = model(**inputs)
         logits = torch.nn.functional.interpolate(
