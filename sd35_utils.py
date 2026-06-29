@@ -819,6 +819,37 @@ def candidate_insertion_score(candidate, existing_person_bboxes, existing_vehicl
     return score
 
 
+def placement_rejection_reason(candidate, existing_person_bboxes, existing_vehicle_bboxes=None,
+                               semantic_masks=None, resolution=RESOLUTION):
+    """Return a short string explaining which hard gate kills `candidate`, or the
+    component scores when it merely scores below threshold.  Diagnostic only —
+    mirrors the gates in candidate_insertion_score.  Used by DEBUG_PLACEMENT."""
+    for bbox in existing_person_bboxes:
+        depth_ok, _ = person_overlap_depth_ok(candidate, bbox)
+        if not depth_ok:
+            return "person_overlap_depth"
+    if REQUIRE_SEMANTIC_PLACEMENT and semantic_masks is None and SEMANTIC_SEGMENTER is not False:
+        return "no_semantic_masks (segmenter on but produced no valid labels)"
+    if semantic_masks:
+        valid_mask = semantic_masks.get("valid")
+        avoid_mask = semantic_masks.get("avoid")
+        foot_bbox = foot_support_bbox(candidate)
+        foot = mask_coverage(valid_mask, foot_bbox)
+        foot_avoid = mask_coverage(avoid_mask, foot_bbox)
+        body_valid = mask_coverage(valid_mask, candidate)
+        avoid = mask_coverage(avoid_mask, candidate)
+        if foot < MIN_FOOT_SUPPORT:
+            return f"foot_support {foot:.2f} < MIN_FOOT_SUPPORT {MIN_FOOT_SUPPORT}"
+        if foot_avoid > MAX_FOOT_AVOID_SUPPORT:
+            return f"foot_avoid {foot_avoid:.2f} > MAX {MAX_FOOT_AVOID_SUPPORT}"
+        if REQUIRE_SEMANTIC_PLACEMENT and body_valid < MIN_BODY_VALID_SUPPORT:
+            return f"body_valid {body_valid:.2f} < MIN {MIN_BODY_VALID_SUPPORT}"
+        if REQUIRE_SEMANTIC_PLACEMENT and avoid > MAX_BODY_AVOID_SUPPORT:
+            return f"body_avoid {avoid:.2f} > MAX {MAX_BODY_AVOID_SUPPORT}"
+        return f"below_threshold (foot={foot:.2f} body_valid={body_valid:.2f} avoid={avoid:.2f})"
+    return "below_threshold (no semantic masks)"
+
+
 def ground_y_range_for_variant(variant, height):
     y_min = int(height * PATCH_ROAD_Y_RANGE[0])
     y_max = int(height * PATCH_ROAD_Y_RANGE[1])
@@ -870,6 +901,8 @@ def find_insertion_region(record, source, variant, rng, device=TRAIN_DEVICE, ret
     best_bbox = None
     best_score = -1e9
     best_meta = None
+    seen_best_candidate = None      # highest score, even if hard-rejected (for diag)
+    seen_best_score = -1e18
     for _ in range(PATCH_MAX_PLACEMENT_TRIES):
         ground_y = sample_ground_y_for_variant(variant, y_min, y_max, rng)
         candidate_x = rng.randint(INSERTION_EDGE_MARGIN, width - INSERTION_EDGE_MARGIN)
@@ -895,6 +928,9 @@ def find_insertion_region(record, source, variant, rng, device=TRAIN_DEVICE, ret
             resolution=width,
             placement_target=placement_target,
         )
+        if score > seen_best_score:
+            seen_best_score = score
+            seen_best_candidate = candidate
         if score > best_score:
             best_bbox = candidate
             best_score = score
@@ -908,6 +944,19 @@ def find_insertion_region(record, source, variant, rng, device=TRAIN_DEVICE, ret
                 "ground_y": ground_y,
             }
     if best_score <= MIN_ACCEPTED_PLACEMENT_SCORE:
+        if DEBUG_PLACEMENT and seen_best_candidate is not None:
+            has_valid = semantic_masks is not None and semantic_masks.get("valid") is not None
+            reason = placement_rejection_reason(
+                seen_best_candidate, existing_person_bboxes,
+                existing_vehicle_bboxes=existing_vehicle_bboxes,
+                semantic_masks=semantic_masks, resolution=width,
+            )
+            print(
+                f"[placement-debug] {record.path.name} / {variant}: "
+                f"best_score={seen_best_score:.3f} (need > {MIN_ACCEPTED_PLACEMENT_SCORE}) | "
+                f"semantic_valid={has_valid} | n_person={len(existing_person_bboxes)} | "
+                f"reason={reason}"
+            )
         best_bbox, best_meta = None, None
     if return_metadata:
         return best_bbox, best_meta

@@ -157,11 +157,17 @@ PLACEMENT_CONFIG = {'BACKGROUND_PRESERVATION_MODE': 'context_person_composite',
                             'train',
                             'truck',
                             'wall'},
- 'MIN_FOOT_SUPPORT': 0.48,
- 'MAX_FOOT_AVOID_SUPPORT': 0.05,
- 'MIN_BODY_VALID_SUPPORT': 0.14,
- 'MAX_BODY_AVOID_SUPPORT': 0.16,
+ # Semantic placement hard gates. The original values (foot 0.48 / foot_avoid
+ # 0.05 / body_valid 0.14 / body_avoid 0.16) were strict enough that, combined
+ # with random candidate sampling, EVERY candidate failed a gate -> 100%
+ # bad_placement even though SegFormer found road/sidewalk. Relaxed to realistic
+ # levels: feet mostly on valid ground, body not dominated by avoid classes.
+ 'MIN_FOOT_SUPPORT': 0.30,
+ 'MAX_FOOT_AVOID_SUPPORT': 0.15,
+ 'MIN_BODY_VALID_SUPPORT': 0.08,
+ 'MAX_BODY_AVOID_SUPPORT': 0.30,
  'REQUIRE_SEMANTIC_PLACEMENT': True,
+ 'DEBUG_PLACEMENT': True,
  'MIN_ACCEPTED_PLACEMENT_SCORE': 0.55,
  'SEMANTIC_FOOT_WEIGHT': 6.5,
  'SEMANTIC_AVOID_PENALTY': 9.0}
