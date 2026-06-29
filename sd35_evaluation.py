@@ -321,8 +321,13 @@ def select_new_generated_person_mask(generated_image, existing_person_bboxes=Non
                 best_reject_reason = "floating_or_bad_ground"
                 continue
         else:
+            # No semantic mask (SegFormer unavailable for this image): we cannot
+            # check "feet on road", only that the foot point sits in a plausible
+            # vertical band.  Use a wider band than the semantic path so a missing
+            # SegFormer does not spike floating_or_bad_ground rejects -- people
+            # standing in the lower-mid of a street frame are still valid.
             ground_y_ratio = det_bbox[3] / max(1, generated_image.size[1])
-            if ground_y_ratio < PATCH_ROAD_Y_RANGE[0] - 0.08 or ground_y_ratio > PATCH_ROAD_Y_RANGE[1] + 0.06:
+            if ground_y_ratio < PATCH_ROAD_Y_RANGE[0] - 0.16 or ground_y_ratio > PATCH_ROAD_Y_RANGE[1] + 0.08:
                 best_reject_reason = "floating_or_bad_ground"
                 continue
 
@@ -607,13 +612,23 @@ def validate_composite_result(source, result, pasted_mask, variant, insert_bbox,
             expected_person_height=meta.get("expected_person_height"),
         )
     except RuntimeError as exc:
-        reason = normalize_reject_reason(exc)
-        if "scale mismatch" in str(exc):
+        # validate_pasted_person_mask raises messages that START with the word
+        # "Accepted ..." -- without an explicit branch, normalize_reject_reason
+        # falls back to the first word and mislabels the reject as "Accepted",
+        # which poisons the histogram and autotune.  Map every raise site.
+        msg = str(exc)
+        if "scale mismatch" in msg:
             reason = "final_scale_mismatch"
-        elif "empty" in str(exc):
+        elif "empty" in msg:
             reason = "accepted_mask_empty"
-        elif "soft" in str(exc) or "transparent" in str(exc):
+        elif "soft" in msg or "transparent" in msg:
             reason = "mask_too_soft"
+        elif "aspect" in msg:
+            reason = "mask_aspect_invalid"
+        elif "too small" in msg or "visually too small" in msg:
+            reason = "person_too_small"
+        else:
+            reason = normalize_reject_reason(exc)
         meta["reject_reason"] = reason
         meta["last_reject_reason"] = reason
         return False, reason, meta

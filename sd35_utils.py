@@ -256,10 +256,30 @@ def load_semantic_segmenter(device=TRAIN_DEVICE):
                 SEMANTIC_SEGMENTATION_MODEL_ID,
                 use_fast=False,
             )
+        # torch 2.10 + recent accelerate can leave from_pretrained weights on the
+        # meta device, so a later .to("cpu") raises "Cannot copy out of meta
+        # tensor; no data!".  Force a real (non-meta) CPU materialisation:
+        #  - low_cpu_mem_usage=False  : do not lazily place on meta
+        #  - device_map=None          : do not let accelerate dispatch/offload
+        #  - torch_dtype=torch.float32: concrete dtype, no meta placeholder
+        # If the build still returns meta params, retry once via to_empty()+reload
+        # of the state dict before giving up.
         segmentation_model = AutoModelForSemanticSegmentation.from_pretrained(
             SEMANTIC_SEGMENTATION_MODEL_ID,
             low_cpu_mem_usage=False,
-        ).to("cpu")
+            device_map=None,
+            torch_dtype=torch.float32,
+        )
+        if any(p.is_meta for p in segmentation_model.parameters()):
+            # second attempt: materialise empty on CPU then load real weights
+            segmentation_model = segmentation_model.to_empty(device="cpu")
+            reloaded = AutoModelForSemanticSegmentation.from_pretrained(
+                SEMANTIC_SEGMENTATION_MODEL_ID, low_cpu_mem_usage=False, device_map=None,
+                torch_dtype=torch.float32,
+            )
+            segmentation_model.load_state_dict(reloaded.state_dict(), strict=False)
+            del reloaded
+        segmentation_model = segmentation_model.to("cpu")
         segmentation_model.eval()
         SEMANTIC_SEGMENTER = {
             "processor": image_processor,
@@ -268,10 +288,15 @@ def load_semantic_segmenter(device=TRAIN_DEVICE):
         }
         print(f"Loaded SegFormer semantic placement model on CPU: {SEMANTIC_SEGMENTATION_MODEL_ID}")
     except Exception as exc:
-        SEMANTIC_SEGMENTER = False
-        print("Semantic placement disabled; falling back to Smart Placement V1 rules.")
+        # Do NOT cache a permanent False: a transient load failure must not
+        # disable semantic placement for the whole run (that blinds placement and
+        # spikes floating_or_bad_ground rejects).  Leave it None so the next call
+        # retries; only this image falls back to V1 placement.
+        SEMANTIC_SEGMENTER = None
+        print("Semantic placement load failed this attempt; falling back to V1 for this image (will retry).")
         print(type(exc).__name__, exc)
-    return None if SEMANTIC_SEGMENTER is False else SEMANTIC_SEGMENTER
+        return None
+    return SEMANTIC_SEGMENTER
 
 
 def label_matches(label, label_set):
