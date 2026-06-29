@@ -1,0 +1,45 @@
+# Concept (text->image) SD3.5 LoRA training.
+#
+# Plain DreamBooth-style LoRA: learn to GENERATE images like the PIPE "add a
+# person" subset. NO mask, NO source latent, NO input_proj, NO segment/paste.
+# Only ONE artifact is produced and required at inference:
+#   adapter/pytorch_lora_weights.safetensors
+#
+# Trains on PIPE target_img (the finished photo that contains the person),
+# filtered strictly to person Instruction_Class. Captions are derived from the
+# PIPE instruction (imperative stripped) so the text encoder learns image->text
+# alignment; an optional trigger_token can be prepended for prompt-time control.
+base_model_id: stabilityai/stable-diffusion-3.5-medium
+model_name: vinped_sd35m_concept_v1
+
+resolution: 512
+rank: 16
+learning_rate: 1.0e-4        # concept LoRA converges faster than the edit flow
+max_train_steps: 4000
+checkpointing_steps: 500
+seed: 42
+grad_clip_norm: 1.0
+grad_accum_steps: 4          # effective batch 4 (t2i needs less than the edit flow)
+
+# data (PIPE person target images; diff used only to drop degenerate pairs)
+pipe_split: train
+person_only: true
+num_train_samples: 4000
+diff_thresh: 25
+min_change_pixels: 64
+
+# caption building
+caption_prefix: "a photo of "
+trigger_token: ""            # e.g. "<vin_ped>" to bind the concept to a token
+
+# flow-matching sampling (SD3 standard)
+weighting_scheme: logit_normal
+logit_mean: 0.0
+logit_std: 1.0
+
+# validation prompts for the in-run / eval contact sheet
+validation_prompts:
+  - "a photo of a person walking on a city street"
+  - "a photo of a man standing on a sidewalk"
+  - "a photo of a woman in a park"
+  - "a photo of a pedestrian crossing the road"
