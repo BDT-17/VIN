@@ -157,20 +157,24 @@ PLACEMENT_CONFIG = {'BACKGROUND_PRESERVATION_MODE': 'context_person_composite',
                             'train',
                             'truck',
                             'wall'},
- # Semantic placement hard gates. The original values (foot 0.48 / foot_avoid
- # 0.05 / body_valid 0.14 / body_avoid 0.16) were strict enough that, combined
- # with random candidate sampling, EVERY candidate failed a gate -> 100%
- # bad_placement even though SegFormer found road/sidewalk. Relaxed to realistic
- # levels: feet mostly on valid ground, body not dominated by avoid classes.
- 'MIN_FOOT_SUPPORT': 0.30,
- 'MAX_FOOT_AVOID_SUPPORT': 0.15,
- 'MIN_BODY_VALID_SUPPORT': 0.08,
- 'MAX_BODY_AVOID_SUPPORT': 0.30,
+ # Semantic placement hard gates.
+ #
+ # Grounding is a FOOT property, not a body property: a pedestrian standing on a
+ # sidewalk naturally has building/wall/sky BEHIND their torso and head, so the
+ # body legitimately overlaps "avoid" classes. The old body-avoid gate
+ # (MAX_BODY_AVOID_SUPPORT 0.16) therefore rejected normal placements — e.g.
+ # "body_avoid 0.62 > MAX 0.3" with no one in the scene. We now gate only on the
+ # FEET (must stand on road/sidewalk/terrain, not on a car/in the sky) and make
+ # the body-avoid check effectively non-binding.
+ 'MIN_FOOT_SUPPORT': 0.30,        # feet mostly on valid ground
+ 'MAX_FOOT_AVOID_SUPPORT': 0.35,  # feet may clip a little non-ground
+ 'MIN_BODY_VALID_SUPPORT': 0.04,  # a little valid ground under the body
+ 'MAX_BODY_AVOID_SUPPORT': 0.97,  # body-over-building/sky is normal -> near-off
  'REQUIRE_SEMANTIC_PLACEMENT': True,
  'DEBUG_PLACEMENT': True,
  'MIN_ACCEPTED_PLACEMENT_SCORE': 0.55,
  'SEMANTIC_FOOT_WEIGHT': 6.5,
- 'SEMANTIC_AVOID_PENALTY': 9.0}
+ 'SEMANTIC_AVOID_PENALTY': 2.5}   # was 9.0 — soft nudge, not a near-veto
 
 SCALE_CONFIG = {'PERSPECTIVE_SCALE_NEAR': 1.14,
  'PERSPECTIVE_SCALE_FAR': 0.50,
