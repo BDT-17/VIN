@@ -10,6 +10,19 @@ is backbone-specific (FLUX integer timesteps, FLUX layer indices, FLUX distilled
 guidance), the *mechanism* is preserved and only the *constant* is re-derived
 for SD3.5 Medium. Those are flagged `SD3.5-ADAPT` below and at the call site.
 
+> **Two modes (`ADDIT_MODE`).** The attention-injection method documented in
+> this file is the **`"faithful"`** mode. In practice on SD3.5 Medium it
+> re-noises and decodes the whole image (background softens / blurs) and the
+> subject mask often collapses to empty so nothing is inserted. The **default
+> is now `"composite"`**: keep Add-it's affordance thesis (no input bbox — the
+> model decides *where*) but run img2img → YOLOv8-seg the *added* person →
+> paste only those pixels onto the byte-exact source. Background is preserved
+> 100% and stays sharp because it never passes through the VAE/diffusion. The
+> composite path is **not** the paper method — it trades the training-free
+> attention mechanism for the repo's "source is the trusted background" rule.
+> This document describes the faithful mode; see
+> `AddItPipeline._add_object_composite` for the composite path.
+
 ## Files
 
 | File | Paper section | Contents |

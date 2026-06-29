@@ -14,10 +14,21 @@ Implements the full Add-it loop of Tewel et al. (ICLR 2025, arXiv:2411.07232):
        mask, and at t_blend composite  Z = M·Z_target + (1−M)·Z_source.
     5. Decode; optionally enforce pixel-exact source outside M.
 
-There is **no input bounding box, no placement heuristic, and no detector
-cutout/paste** — Add-it decides *where* to add the object (its affordance
-thesis).  The only inputs are a source image, a target prompt, and the subject
-token (the noun naming the added object).
+The only inputs are a source image, a target prompt, and the subject token
+(the noun naming the added object); there is no input bounding box and no
+placement heuristic — Add-it decides *where* to add the object (its affordance
+thesis).
+
+Two modes (``ADDIT_MODE`` in ``addit_config``):
+
+  * ``"faithful"`` — the attention-injection loop described above.  Re-noises
+    and decodes the whole image, so the background passes through the VAE.
+  * ``"composite"`` (default) — keeps the affordance thesis (no bbox, the model
+    decides where) but runs img2img -> YOLOv8-seg the *added* person -> paste
+    only those pixels onto the byte-exact source.  Background is preserved 100%
+    and stays sharp because it never passes through the VAE/diffusion.  This is
+    the repo's core rule ("the source image is the trusted background") applied
+    to Add-it; see ``AddItPipeline._add_object_composite``.
 """
 
 import gc
@@ -50,6 +61,13 @@ try:
         ADDIT_TRANSFORMER_DEVICE, ADDIT_USE_SAM2, ADDIT_USE_TWO_GPUS,
         RESOLUTION, TRAIN_DEVICE,
     )
+    from .addit_config import (
+        ADDIT_MODE, ADDIT_IMG2IMG_STRENGTH, ADDIT_IMG2IMG_STEPS,
+        ADDIT_IMG2IMG_GUIDANCE, ADDIT_PERSON_SEG_MODEL, ADDIT_PERSON_MIN_CONF,
+        ADDIT_PERSON_MASK_THRESHOLD, ADDIT_FILTER_EXISTING, ADDIT_EXISTING_IOU,
+        ADDIT_COMPOSITE_TRIM_FRINGE_PX, ADDIT_COMPOSITE_FEATHER_PX,
+        ADDIT_COMPOSITE_MAX_PEOPLE, ADDIT_GEN_MAX_RETRIES,
+    )
     from .addit_core import (
         AddItState, attn_vector_to_mask_image, coarse_mask_from_attention,
         composite_outside_mask, decode_latent_to_image, encode_image_to_latent,
@@ -57,6 +75,8 @@ try:
         pixel_mask_to_latent, renoise_source, resolve_layer_window,
         resolve_mask_layers, restore_processors, sample_attention_points,
         sigma_for_timestep, solve_gamma,
+        load_person_segmenter, segment_added_person_mask,
+        composite_person_onto_source,
     )
     from .addit_sam import refine_mask_with_sam2
 except ImportError:
@@ -78,6 +98,13 @@ except ImportError:
         ADDIT_TRANSFORMER_DEVICE, ADDIT_USE_SAM2, ADDIT_USE_TWO_GPUS,
         RESOLUTION, TRAIN_DEVICE,
     )
+    from addit_config import (
+        ADDIT_MODE, ADDIT_IMG2IMG_STRENGTH, ADDIT_IMG2IMG_STEPS,
+        ADDIT_IMG2IMG_GUIDANCE, ADDIT_PERSON_SEG_MODEL, ADDIT_PERSON_MIN_CONF,
+        ADDIT_PERSON_MASK_THRESHOLD, ADDIT_FILTER_EXISTING, ADDIT_EXISTING_IOU,
+        ADDIT_COMPOSITE_TRIM_FRINGE_PX, ADDIT_COMPOSITE_FEATHER_PX,
+        ADDIT_COMPOSITE_MAX_PEOPLE, ADDIT_GEN_MAX_RETRIES,
+    )
     from addit_core import (
         AddItState, attn_vector_to_mask_image, coarse_mask_from_attention,
         composite_outside_mask, decode_latent_to_image, encode_image_to_latent,
@@ -85,6 +112,8 @@ except ImportError:
         pixel_mask_to_latent, renoise_source, resolve_layer_window,
         resolve_mask_layers, restore_processors, sample_attention_points,
         sigma_for_timestep, solve_gamma,
+        load_person_segmenter, segment_added_person_mask,
+        composite_person_onto_source,
     )
     from addit_sam import refine_mask_with_sam2
 
@@ -305,6 +334,82 @@ class AddItPipeline:
         )
 
     # ------------------------------------------------------------------
+    # Composite insertion  (ADDIT_MODE == "composite")
+    # ------------------------------------------------------------------
+    def _add_object_composite(
+        self,
+        source_image: Image.Image,
+        target_prompt: Optional[str] = None,
+        subject_token: Optional[str] = None,
+        seed: Optional[int] = None,
+    ) -> AddItResult:
+        """img2img a person into the scene, segment the NEW person, composite it
+        onto the byte-exact source.  Background preserved 100%, output sharp."""
+        target_prompt = target_prompt or ADDIT_DEFAULT_TARGET_PROMPT
+        subject_token = subject_token or ADDIT_DEFAULT_SUBJECT_TOKEN
+        seed = ADDIT_SEED if seed is None else seed
+
+        source_image = source_image.convert("RGB").resize((RESOLUTION, RESOLUTION), Image.LANCZOS)
+        gen_device = self.device if str(self.device).startswith("cuda") else "cpu"
+
+        segmenter = load_person_segmenter(ADDIT_PERSON_SEG_MODEL, device=gen_device)
+
+        # Retry with fresh seeds until the model actually places a NEW person.
+        last_candidate = None
+        person_mask = None
+        person_count = 0
+        best_conf = 0.0
+        for attempt in range(max(1, ADDIT_GEN_MAX_RETRIES + 1)):
+            gen = torch.Generator(device=gen_device).manual_seed(seed + attempt)
+            try:
+                candidate = self.pipe(
+                    prompt=target_prompt,
+                    negative_prompt=ADDIT_NEGATIVE_PROMPT,
+                    image=source_image,
+                    strength=ADDIT_IMG2IMG_STRENGTH,
+                    num_inference_steps=ADDIT_IMG2IMG_STEPS,
+                    guidance_scale=ADDIT_IMG2IMG_GUIDANCE,
+                    generator=gen,
+                ).images[0].resize((RESOLUTION, RESOLUTION), Image.LANCZOS)
+            except Exception as exc:
+                return AddItResult(success=False, source_image=source_image,
+                                   subject_token=subject_token,
+                                   target_prompt=target_prompt, seed=seed,
+                                   error=f"img2img_failed: {type(exc).__name__}: {exc}")
+            last_candidate = candidate
+
+            person_mask, person_count, best_conf = segment_added_person_mask(
+                candidate, source_image, segmenter,
+                min_conf=ADDIT_PERSON_MIN_CONF,
+                mask_threshold=ADDIT_PERSON_MASK_THRESHOLD,
+                filter_existing=ADDIT_FILTER_EXISTING,
+                existing_iou=ADDIT_EXISTING_IOU,
+                max_people=ADDIT_COMPOSITE_MAX_PEOPLE,
+                trim_fringe_px=ADDIT_COMPOSITE_TRIM_FRINGE_PX,
+                feather_px=ADDIT_COMPOSITE_FEATHER_PX,
+            )
+            if person_mask is not None:
+                break
+
+        if person_mask is None:
+            # No new person could be isolated.  Return the source unchanged so
+            # the background-preservation guarantee still holds and metrics
+            # report object_added=0 honestly (rather than pasting noise).
+            return AddItResult(
+                success=True, result_image=source_image, source_image=source_image,
+                subject_token=subject_token, target_prompt=target_prompt, seed=seed,
+                mask_image=None, used_sam2=False,
+                error="no_new_person_segmented",
+            )
+
+        result_image = composite_person_onto_source(source_image, last_candidate, person_mask)
+        return AddItResult(
+            success=True, result_image=result_image, source_image=source_image,
+            subject_token=subject_token, target_prompt=target_prompt, seed=seed,
+            mask_image=person_mask, used_sam2=False,
+        )
+
+    # ------------------------------------------------------------------
     # Main generation
     # ------------------------------------------------------------------
     def add_object(
@@ -317,6 +422,16 @@ class AddItPipeline:
         guidance_scale: Optional[float] = None,
         source_is_real: Optional[bool] = None,
     ) -> AddItResult:
+        # Composite mode: img2img -> YOLO-seg the added person -> paste onto the
+        # byte-exact source.  Keeps Add-it's affordance thesis (model decides
+        # WHERE, no insertion bbox) but preserves 100% of the background and
+        # keeps it sharp (the background never passes through the VAE/diffusion).
+        if ADDIT_MODE == "composite":
+            return self._add_object_composite(
+                source_image, target_prompt=target_prompt,
+                subject_token=subject_token, seed=seed,
+            )
+
         target_prompt = target_prompt or ADDIT_DEFAULT_TARGET_PROMPT
         subject_token = subject_token or ADDIT_DEFAULT_SUBJECT_TOKEN
         seed = ADDIT_SEED if seed is None else seed

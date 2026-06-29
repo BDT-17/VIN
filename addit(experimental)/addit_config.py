@@ -149,6 +149,51 @@ ADDIT_EXAMPLE_PROMPTS = [
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 4b. Composite insertion mode  (background-preserving, sharp output)
+# ═══════════════════════════════════════════════════════════════════════════
+# The faithful attention-injection port (§3.1–3.4 above) re-noises the whole
+# image and decodes it, so the background passes through the VAE and softens,
+# and on SD3.5 the subject mask frequently collapses to empty -> nothing is
+# inserted.  This mode keeps Add-it's *affordance thesis* (no insertion bbox,
+# the model decides WHERE) but enforces the repo's core rule — the source image
+# is the trusted background — by compositing only the newly-generated person
+# pixels back onto the byte-exact source.  Pipeline:
+#
+#   source --img2img(prompt with a person)--> candidate
+#         --YOLOv8-seg(person)--> mask of the ADDED person(s) only
+#         --composite(candidate, source, mask)--> bg byte-exact outside mask
+#
+# When ADDIT_MODE == "composite" this path runs; "faithful" keeps the paper
+# attention-injection loop (kept for reference / ablation).
+ADDIT_MODE = "composite"                      # "composite" | "faithful"
+
+# img2img generation: the model adds the person across the whole frame and
+# decides placement itself (no bbox).  Strength is the diffusion budget — high
+# enough to introduce a person, low enough that the scene stays coherent so the
+# segmenter can isolate the new person against the original layout.
+ADDIT_IMG2IMG_STRENGTH = 0.72
+ADDIT_IMG2IMG_STEPS = 34
+ADDIT_IMG2IMG_GUIDANCE = 6.5
+
+# Person segmentation on the candidate (Ultralytics YOLOv8-seg, COCO class 0).
+ADDIT_PERSON_SEG_MODEL = "yolov8m-seg.pt"
+ADDIT_PERSON_MIN_CONF = 0.25                  # below this a detection is ignored
+ADDIT_PERSON_MASK_THRESHOLD = 0.40            # seg-prob -> binary mask cutoff
+
+# "New person" filter: keep only people that are NOT already in the source, so
+# we add rather than re-paste existing pedestrians.  A candidate-person box is
+# treated as pre-existing (and skipped) when it overlaps a source-person box by
+# more than this IoU.  Set source detection on/off via ADDIT_FILTER_EXISTING.
+ADDIT_FILTER_EXISTING = True
+ADDIT_EXISTING_IOU = 0.45
+
+# Composite mask cleanup (keep it tight so background stays the source).
+ADDIT_COMPOSITE_TRIM_FRINGE_PX = 2            # erode to drop generated-bg halo
+ADDIT_COMPOSITE_FEATHER_PX = 2                # soft alpha edge for a clean seam
+ADDIT_COMPOSITE_MAX_PEOPLE = 3                # cap added people per image
+ADDIT_GEN_MAX_RETRIES = 2                     # re-seed if no new person is found
+
+# ═══════════════════════════════════════════════════════════════════════════
 # 5. Output & debug
 # ═══════════════════════════════════════════════════════════════════════════
 ADDIT_OUTPUT_DIR = Path("/kaggle/working/addit_faithful")

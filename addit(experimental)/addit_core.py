@@ -56,7 +56,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn.functional as F
-from PIL import Image
+from PIL import Image, ImageFilter
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -626,3 +626,160 @@ def composite_outside_mask(source_image: Image.Image, generated_image: Image.Ima
     generated = generated_image.convert("RGB").resize(source.size, Image.LANCZOS)
     mask = mask_img.convert("L").resize(source.size, Image.BILINEAR)
     return Image.composite(generated, source, mask)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Composite insertion mode  (background-preserving, sharp output)
+# ═══════════════════════════════════════════════════════════════════════════
+# These helpers implement the ADDIT_MODE == "composite" path: segment the
+# newly-generated person(s) out of an img2img candidate and paste ONLY those
+# pixels back onto the byte-exact source.  Self-contained — depends only on
+# Ultralytics YOLO (soft) + PIL/numpy, never on the root sd35_* augmentation
+# modules (Add-it stays a standalone reference flow).
+
+_PERSON_SEGMENTER = None  # lazily-loaded Ultralytics YOLO-seg model (or False)
+
+
+def load_person_segmenter(model_path: str, device=None):
+    """Load Ultralytics YOLOv8-seg once; return the model or None if unavailable.
+
+    Cached in a module global so repeated ``add_object`` calls reuse one model.
+    Returns None (not raising) when ultralytics/weights are missing so the
+    caller can degrade gracefully instead of crashing the whole run.
+    """
+    global _PERSON_SEGMENTER
+    if _PERSON_SEGMENTER is False:
+        return None
+    if _PERSON_SEGMENTER is not None:
+        return _PERSON_SEGMENTER
+    try:
+        from ultralytics import YOLO
+        model = YOLO(model_path)
+        _PERSON_SEGMENTER = {"model": model, "device": device}
+        return _PERSON_SEGMENTER
+    except Exception as exc:  # ultralytics missing / weights not found
+        print(f"YOLO person segmenter unavailable ({type(exc).__name__}: {exc}); "
+              "composite mode cannot isolate the added person.")
+        _PERSON_SEGMENTER = False
+        return None
+
+
+def _bbox_iou(a, b) -> float:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _run_person_seg(segmenter, image: Image.Image, min_conf: float,
+                    mask_threshold: float, person_class: int = 0):
+    """Run YOLO-seg; return [(bbox_xyxy, conf, mask_bool_HxW), ...] for people."""
+    import numpy as _np
+    model = segmenter["model"]
+    device = segmenter["device"]
+    arr = _np.array(image.convert("RGB"))
+    kwargs = {"verbose": False, "conf": float(min_conf)}
+    if device is not None:
+        kwargs["device"] = device
+    res = model(arr, **kwargs)
+    out = []
+    if not res or res[0].masks is None or res[0].boxes is None:
+        return out
+    r = res[0]
+    H, W = arr.shape[:2]
+    masks = r.masks.data.cpu().numpy()          # (N, h, w) in [0,1]
+    boxes = r.boxes.xyxy.cpu().numpy()
+    confs = r.boxes.conf.cpu().numpy()
+    clss = r.boxes.cls.cpu().numpy()
+    for m, b, c, k in zip(masks, boxes, confs, clss):
+        if int(k) != person_class:
+            continue
+        # resize mask to full image, threshold to binary
+        mask_img = Image.fromarray((m * 255).astype("uint8"), mode="L").resize((W, H), Image.BILINEAR)
+        mb = _np.array(mask_img) >= int(mask_threshold * 255)
+        out.append((tuple(float(v) for v in b), float(c), mb))
+    return out
+
+
+def segment_added_person_mask(
+    candidate_image: Image.Image,
+    source_image: Image.Image,
+    segmenter,
+    *,
+    min_conf: float,
+    mask_threshold: float,
+    filter_existing: bool,
+    existing_iou: float,
+    max_people: int,
+    trim_fringe_px: int,
+    feather_px: int,
+) -> Tuple[Optional[Image.Image], int, float]:
+    """Mask of the person(s) added in ``candidate`` but absent from ``source``.
+
+    Returns ``(mask_L | None, kept_person_count, best_conf)``.  The mask is the
+    union of every kept person's segmentation, cleaned (fringe-trim + feather)
+    so the composite seam is tight.  ``None`` when no NEW person is found.
+    """
+    import numpy as _np
+    if segmenter is None:
+        return None, 0, 0.0
+
+    cand_people = _run_person_seg(segmenter, candidate_image, min_conf, mask_threshold)
+    if not cand_people:
+        return None, 0, 0.0
+
+    existing_boxes = []
+    if filter_existing:
+        src_people = _run_person_seg(segmenter, source_image, min_conf, mask_threshold)
+        existing_boxes = [p[0] for p in src_people]
+
+    # Keep candidate people that don't overlap an existing source person.
+    kept = []
+    for bbox, conf, mb in cand_people:
+        if filter_existing and any(_bbox_iou(bbox, eb) > existing_iou for eb in existing_boxes):
+            continue
+        kept.append((bbox, conf, mb))
+    if not kept:
+        return None, 0, 0.0
+
+    # Highest-confidence first, cap the count.
+    kept.sort(key=lambda t: t[1], reverse=True)
+    kept = kept[:max(1, max_people)]
+    best_conf = kept[0][1]
+
+    W, H = candidate_image.size
+    union = _np.zeros((H, W), dtype=bool)
+    for _, _, mb in kept:
+        union |= mb
+    mask_img = Image.fromarray((union.astype("uint8") * 255), mode="L")
+
+    # Cleanup: erode to drop the generated-background fringe, then feather.
+    if trim_fringe_px > 0:
+        mask_img = mask_img.filter(ImageFilter.MinFilter(size=1 + 2 * trim_fringe_px))
+    if feather_px > 0:
+        mask_img = mask_img.filter(ImageFilter.GaussianBlur(radius=feather_px))
+    return mask_img, len(kept), best_conf
+
+
+def composite_person_onto_source(
+    source_image: Image.Image,
+    candidate_image: Image.Image,
+    person_mask: Image.Image,
+) -> Image.Image:
+    """Paste ONLY the masked person pixels from candidate onto the source.
+
+    Background is byte-exact source outside the mask (the repo's core rule);
+    inside the (feathered) mask the candidate's sharp person pixels show.
+    """
+    source = source_image.convert("RGB")
+    candidate = candidate_image.convert("RGB").resize(source.size, Image.LANCZOS)
+    mask = person_mask.convert("L").resize(source.size, Image.BILINEAR)
+    return Image.composite(candidate, source, mask)
