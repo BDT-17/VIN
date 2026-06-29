@@ -42,10 +42,13 @@ def _segmenter_device_key(device=None):
 
 def load_person_segmenter(device=None):
     device_key = _segmenter_device_key(device)
-    if PERSON_SEGMENTERS.get(device_key) is False:
-        return None
-    if device_key in PERSON_SEGMENTERS:
-        return PERSON_SEGMENTERS[device_key]
+    # A cached *model* is reused; we intentionally do NOT cache a permanent
+    # "False" failure.  A single load hiccup (e.g. transient CUDA/NMS pressure)
+    # must not poison the whole shard into "segmenter_unavailable" for every
+    # remaining image -- the next call retries the load.
+    cached = PERSON_SEGMENTERS.get(device_key)
+    if cached not in (None, False):
+        return cached
     try:
         from ultralytics import YOLO
         segmenter = YOLO(CONTEXT_PERSON_SEGMENTATION_MODEL)
@@ -53,8 +56,8 @@ def load_person_segmenter(device=None):
         print(f"Loaded person segmentation model on {device_key}: {CONTEXT_PERSON_SEGMENTATION_MODEL}")
         return segmenter
     except Exception as exc:
-        PERSON_SEGMENTERS[device_key] = False
-        print("Person segmentation unavailable; context_person_composite will use fallback if enabled.")
+        PERSON_SEGMENTERS.pop(device_key, None)  # do not poison; allow retry next call
+        print("Person segmentation load failed this attempt; will retry on next call.")
         print(type(exc).__name__, exc)
         return None
 
@@ -212,13 +215,39 @@ def select_new_generated_person_mask(generated_image, existing_person_bboxes=Non
     segmenter = load_person_segmenter(device=device)
     if segmenter is None:
         return None, None, "segmenter_unavailable", default_scale_correction_metadata(), None
-    try:
-        results = segmenter.predict(generated_image, imgsz=RESOLUTION, conf=CONTEXT_PERSON_MIN_CONFIDENCE, device=device, verbose=False)
-    except Exception as exc:
-        print("Person segmentation failed; retrying if possible.")
-        print(type(exc).__name__, exc)
+    # YOLO NMS can hit its internal time limit ("NMS time limit ... exceeded")
+    # when the GPU is under SD3.5 + CPU-offload pressure; that surfaces as a
+    # transient failure / empty result.  Retry a couple of times, and fall back
+    # to a CPU predict (no GPU contention) before giving up, so one busy moment
+    # does not reject an otherwise-good candidate.
+    results = None
+    last_exc = None
+    predict_plan = [
+        {"device": device, "imgsz": RESOLUTION},
+        {"device": device, "imgsz": RESOLUTION},
+        {"device": "cpu", "imgsz": RESOLUTION},
+    ]
+    for plan in predict_plan:
+        try:
+            results = segmenter.predict(
+                generated_image,
+                imgsz=plan["imgsz"],
+                conf=CONTEXT_PERSON_MIN_CONFIDENCE,
+                device=plan["device"],
+                verbose=False,
+            )
+            if results:
+                break
+        except Exception as exc:
+            last_exc = exc
+            print(f"Person segmentation predict failed on {plan['device']}; retrying.")
+            print(type(exc).__name__, exc)
+            continue
+    if results is None:
         meta = default_scale_correction_metadata()
         meta["last_reject_reason"] = "segmenter_failed"
+        if last_exc is not None:
+            print("Person segmentation failed after retries.")
         return None, None, "segmenter_failed", meta, None
     if not results:
         meta = default_scale_correction_metadata()
