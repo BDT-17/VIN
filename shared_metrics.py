@@ -1,29 +1,27 @@
-"""Shared evaluation metrics — common core for ALL THREE insertion flows.
+"""Shared evaluation metrics — common core for BOTH insertion flows.
 
-The repo has three object-insertion flows that previously each measured quality
+The repo has two object-insertion flows that previously each measured quality
 differently and could not be compared head-to-head:
 
   * V5 augmentation  (``sd35_metrics.py``)        — fused affordance score + gates
   * LoRA inpaint     (``LoRA/inference/inpaint_metrics.py``) — component-only
-  * ADD-IT           (``addit(experimental)/``)   — (had no quantitative metric)
 
 This module is the **shared intersection** every flow can compute: it depends on
-nothing but ``numpy`` + ``Pillow`` (and an *injected* detector callable), so the
-root V5 flow, the ``LoRA/`` package and the ``addit(experimental)/`` package can
-all ``import shared_metrics`` once the repo root is on ``sys.path`` (which all
-three notebooks already do).
+nothing but ``numpy`` + ``Pillow`` (and an *injected* detector callable), so both
+the root V5 flow and the ``LoRA/`` package can ``import shared_metrics`` once the
+repo root is on ``sys.path`` (which both notebooks already do).
 
 Scope (the agreed common set — no fixed mask / no fixed bbox required):
   * **Person detection**     — ``person_detected``, ``person_confidence``
   * **Inclusion**            — was a NEW object actually added vs the source?
-                               (detector count delta, ADD-IT-paper "Inclusion")
+                               (detector count delta)
   * **Scale**                — ``scale_ratio``, ``scale_error`` vs expected height
   * **Background preservation** — ``bg_mae`` / ``bg_ssim`` of pixels OUTSIDE the
                                object region (an explicit mask if a flow has one,
                                else the detected-object bbox).
 
 Each flow keeps its own extra metrics (V5 placement/affordance, LoRA
-edge_seam/outside_mask, ADD-IT γ-trace) as *extensions* layered on top of this.
+edge_seam/outside_mask) as *extensions* layered on top of this.
 
 Detector contract (dependency-injected so this module imports anywhere):
     detector(image_path_or_pil) -> list of {"bbox_xyxy": (x1,y1,x2,y2), "conf": float, "cls": int}

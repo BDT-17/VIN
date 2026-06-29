@@ -2,7 +2,7 @@
 
 Research toolkit built around **Stable Diffusion 3.5 Medium** for generating and
 training on synthetic pedestrian data, with **CityPersons** as the reference
-benchmark. The repository hosts four independent flows that share the same SD3.5
+benchmark. The repository hosts two independent flows that share the same SD3.5
 foundation but serve different goals.
 
 > The central design rule across every flow: **the source image is the trusted
@@ -16,7 +16,6 @@ foundation but serve different goals.
 |------|------|---------|--------|
 | `sd35_*.py`, `sd35_run.ipynb`, `sd3.5-…clean.ipynb` | **V5 augmentation** | Insert objects into existing images while preserving the background | Smoke-runnable research baseline |
 | `LoRA/` | **LoRA inpaint-edit** | Add an object into a scene (preserve 100% bg, match the vibe). Data ETL → train edit-LoRA on PIPE pairs → infer + eval | **Active focus** |
-| `addit(experimental)/` | **ADDIT** | Training-free object insertion (attention injection + structure transfer), self-contained | Experimental, kept for reference |
 | `docs/` | — | Design notes, model selection, workflow diagrams | — |
 | `tests/` | — | Root augmentation tests (`LoRA/tests/` holds the LoRA tests) | — |
 
@@ -121,15 +120,6 @@ See `LoRA/README_LORA.md` for the full per-stage contract.
 
 ---
 
-## 3. ADDIT (experimental, `addit(experimental)/`)
-
-Training-free object insertion (no LoRA): a custom joint-attention processor
-(cache/inject), noise structure transfer, and subject-guided latent blending,
-over an SD3.5 (or optional FLUX) backend. Self-contained — nothing else imports
-it. Kept as a reference implementation; not part of the active flow.
-
----
-
 ## Imports
 
 - **`LoRA/`** is a clean Python package: add the repo root to `sys.path` and use
@@ -169,6 +159,5 @@ VRAM stable.
 
 A research toolkit, not a production service. The V5 augmentation flow is a
 smoke-runnable baseline; the **LoRA inpaint-edit flow is the current focus**
-(conditioning + end-to-end run verified; full-train for quality in progress);
-ADDIT is a self-contained experimental reference. Datasets and trained model
-artifacts are **not** stored in this repo.
+(conditioning + end-to-end run verified; full-train for quality in progress).
+Datasets and trained model artifacts are **not** stored in this repo.
