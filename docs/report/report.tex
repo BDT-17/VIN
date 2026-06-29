@@ -66,7 +66,59 @@ Augmentation}
 \date{06/2026}
 
 \begin{document}
-\maketitle
+
+% ============================================================================
+%  Cover page (titlepage)
+% ============================================================================
+\begin{titlepage}
+\begin{tikzpicture}[overlay,remember picture]
+\draw [line width=3pt]
+    ($ (current page.north west) + (3.0cm,-2.0cm) $)
+    rectangle
+    ($ (current page.south east) + (-2.0cm,2.5cm) $);
+\draw [line width=0.5pt]
+    ($ (current page.north west) + (3.1cm,-2.1cm) $)
+    rectangle
+    ($ (current page.south east) + (-2.1cm,2.6cm) $);
+\end{tikzpicture}
+\begin{center}
+\vspace*{0.4cm}
+{\fontsize{14pt}{18pt}\selectfont VINUNI UNIVERSITY}\\
+\textbf{\fontsize{16pt}{20pt}\selectfont VINSMART FUTURE COMPANY}
+
+\vspace{0.7cm}
+\IfFileExists{Images/VSF_logo.jpg}{%
+    \includegraphics[width=4.5cm]{Images/VSF_logo.jpg}%
+}{\IfFileExists{Images/VSF_logo.png}{%
+    \includegraphics[width=4.5cm]{Images/VSF_logo.png}%
+}{\rule{4.5cm}{4.5cm}}}% placeholder box until Images/VSF_logo.{jpg,png} is added
+
+\vspace{0.7cm}
+{\fontsize{24pt}{28pt}\selectfont REPORT\par}
+\vspace{10pt}
+{\fontsize{30pt}{38pt}\selectfont\bfseries INTERNSHIP AT THE COMPANY\par}
+
+\vfill
+
+{\fontsize{18pt}{22pt}\selectfont\bfseries Topic:\par}
+\vspace{6pt}
+{\fontsize{20pt}{28pt}\selectfont\bfseries BACKGROUND-PRESERVING OBJECT\\ INSERTION FOR DATASET AUGMENTATION\par}
+
+\vfill
+
+{\begin{tabular}{l l}
+ \fontsize{14pt}{0pt}\selectfont Student:    & \fontsize{14pt}{0pt}\selectfont BUI DUC THANG \vspace{6pt} \\
+\fontsize{14pt}{0pt}\selectfont Student ID:   &\fontsize{14pt}{0pt}\selectfont 2A202600002 \vspace{6pt}\\
+\fontsize{14pt}{0pt}\selectfont Supervisor: & \fontsize{14pt}{0pt}\selectfont PHAM ANH DUONG
+\end{tabular}\par}
+
+\vspace{1.5cm}
+{\fontsize{14pt}{0pt}\selectfont Hanoi, June 2026\par}
+\vspace*{0.4cm}
+\end{center}
+\end{titlepage}
+
+\clearpage
 
 % ============================================================================
 \begin{abstract}
@@ -116,8 +168,8 @@ preservation; Stable Diffusion~3.5; LoRA; cross-flow evaluation.
 \subsection*{Global context and motivation}
 Supervised object detectors and segmenters remain data-hungry, and the classes
 that matter most are often the least represented: rare poses, crowded scenes,
-unusual scales. Synthetic object insertion --- placing a new, plausible
-instance into a real image --- is an attractive way to enlarge such data, because
+unusual scales. Synthetic object insertion - placing a new, plausible
+instance into a real image - is an attractive way to enlarge such data, because
 it promises new positives without new photography or new manual labels. The
 promise holds only if the inserted object is realistic enough to be a valid
 positive and the rest of the image is left exactly as it was, so that every
@@ -161,11 +213,11 @@ Insertion and editing methods can be read as successive attempts to enlarge the
 canvas the model may touch while shrinking the damage it does to everything else;
 each generation removes one failure mode and exposes the next.
 \begin{itemize}[leftmargin=1.4em,itemsep=2pt]
-  \item Full-image img2img --- adds objects but rewrites the global scene.
-  \item Patch / tight-mask / bbox inpaint --- progressively more canvas,
+  \item Full-image img2img - adds objects but rewrites the global scene.
+  \item Patch / tight-mask / bbox inpaint - progressively more canvas,
         but generated background inside the edit region still leaks in.
   \item Training-free attention-injection insertion (\eg Add-it~\cite{addit2025})
-        --- strong placement and no fine-tuning, but it blends in latent space and
+        - strong placement and no fine-tuning, but it blends in latent space and
         decodes the whole frame, so pixels outside the object are not guaranteed
         identical to the source, and its constants are derived for a different
         (FLUX) backbone.
@@ -185,12 +237,12 @@ and let $c$ be a target-object specification (class, prompt, optional placement
 prior). The insertion task is to learn or apply a map
 $\mathcal{F}\!:\!(I_{\mathrm{src}}, c) \to I_{\mathrm{out}}$, with
 $I_{\mathrm{out}}\in\mathbb{R}^{H\times W\times 3}$, satisfying four
-requirements: \textbf{(i)~object validity} --- a detectable, correctly-classed
-object of plausible appearance is added; \textbf{(ii)~scale and grounding} ---
+requirements: \textbf{(i)~object validity} - a detectable, correctly-classed
+object of plausible appearance is added; \textbf{(ii)~scale and grounding} -
 the object's size and contact point are physically plausible for the scene;
-\textbf{(iii)~background preservation} --- pixels outside the object region are
+\textbf{(iii)~background preservation} - pixels outside the object region are
 unchanged relative to $I_{\mathrm{src}}$ (\bgmae$\,\to 0$, \bgssim$\,\to 1$); and
-\textbf{(iv)~label integrity} --- the augmented sample remains valid training
+\textbf{(iv)~label integrity} - the augmented sample remains valid training
 data for the downstream task.
 
 \noindent Three challenges constrain any solution.
@@ -236,7 +288,7 @@ The principal contributions of this report are:
 \subsection*{Report structure}
 The remainder is organised as follows. \Cref{sec:objectives} defines the
 objectives and success criteria. \Cref{sec:methods} describes the materials and
-methods --- model selection, the three flows, the shared metric core, and the
+methods - model selection, the three flows, the shared metric core, and the
 ablation design. \Cref{sec:results} presents the quantitative comparison,
 ablations, efficiency analysis, and qualitative results. \Cref{sec:conclusion}
 summarises contributions, limitations, and future work.
@@ -262,7 +314,7 @@ validation thresholds.
         placement, scale, and pose itself, integrate objects better than a
         training-free attention-injection inserter, once both are reduced to the
         same segment-and-paste preservation guarantee?
-  \item What is the quality--cost trade-off across the three flows --- what does
+  \item What is the quality--cost trade-off across the three flows - what does
         each added component (training, attention injection, scale correction) buy
         in preservation or inclusion, and at what runtime and memory cost?
 \end{enumerate}
@@ -326,8 +378,8 @@ backbones considered and why each is not the default.
 \end{table}
 
 \subsection{Diffusion backbone: MM-DiT and rectified flow}\label{sec:backbone}
-All three flows share a single generation backbone --- Stable Diffusion~3.5
-Medium --- so their architectural differences lie entirely in how each
+All three flows share a single generation backbone - Stable Diffusion~3.5
+Medium - so their architectural differences lie entirely in how each
 conditions that backbone, not in the backbone itself. We summarise the
 backbone here so the per-flow descriptions can refer to it.
 
@@ -341,8 +393,8 @@ Transformer (DiT)~\cite{dit} rather than a U-Net: the latent is split into
 non-overlapping patches, each linearly embedded into a token, and the resulting
 token sequence is processed by a stack of transformer blocks. DiT injects the
 conditioning signal (timestep, class) through adaptive layer
-normalisation (adaLN-Zero) --- per-block scale/shift parameters regressed from
-the conditioning embedding --- which~\cite{dit} found to outperform both
+normalisation (adaLN-Zero) - per-block scale/shift parameters regressed from
+the conditioning embedding - which~\cite{dit} found to outperform both
 cross-attention and in-context token conditioning.
 
 \paragraph{MM-DiT: two streams, one attention.}
@@ -350,7 +402,7 @@ SD3 generalises DiT to text-to-image with the multimodal MM-DiT
 block~\cite{sd3}. Image patches (with positional encodings, from $2\times2$
 latent patches) and text tokens are embedded to a common width and concatenated
 into one sequence; two separate sets of weights process the two
-modalities --- effectively two parallel transformers --- that are joined
+modalities - effectively two parallel transformers - that are joined
 only for the attention operation, so each modality keeps its own
 representation while still attending to the other~\cite{sd3}. Text conditioning
 comes from three frozen encoders (CLIP-L, CLIP-G, T5-XXL): the pooled CLIP
@@ -410,15 +462,15 @@ generation flow common to all three flows.
   disabled by default here) and an optionally img2img-encoded latent feed the
   flow-matching denoise loop over the MM-DiT-X stack; the final latent is decoded,
   the target object is segmented, and the generated background is discarded
-  --- the point at which background-as-source-of-truth begins.}
+  - the point at which background-as-source-of-truth begins.}
   \label{fig:genflow}
 \end{figure}
 
 \subsection{Dataset}\label{sec:dataset}
 The composite-augmentation flow draws pedestrian source frames from three
 datasets, each with a fixed role (\cref{tab:dataset}). CityPersons~\cite{citypersons}
---- $2{,}975$ train / $500$ val images with roughly $35{,}000$ annotated persons, a
-bounding-box subset of Cityscapes --- supplies LoRA candidates from its train
+- $2{,}975$ train / $500$ val images with roughly $35{,}000$ annotated persons, a
+bounding-box subset of Cityscapes - supplies LoRA candidates from its train
 split, while its validation split is frozen for evaluation and never trains the
 LoRA. MOT17-02~\cite{mot17} contributes $600$ frames ($1920\times1080$, sampled at
 $2$\,fps over $2$\,s windows to avoid consecutive-frame redundancy), and a
@@ -433,8 +485,8 @@ the real photo, so each pair is consistent outside the edited region by
 construction. We keep only person classes; the frozen edit-evaluation set is the
 PIPE test split ($752$ pairs), person-only.
 
-Splits are group-aware --- by scene (CityPersons), sequence time-window (MOT17),
-or perceptual cluster (human detection) --- so near-duplicate frames cannot
+Splits are group-aware - by scene (CityPersons), sequence time-window (MOT17),
+or perceptual cluster (human detection) - so near-duplicate frames cannot
 straddle train and eval. The LoRA train/val split is $85/15$ (seed $42$) after a
 quality filter (minimum bounding-box height $96$\,px, visible ratio $0.45$, quality
 score $0.70$), and the frozen eval pool is itself partitioned $70/30$ into a
@@ -455,18 +507,18 @@ the ETL run.}
     CityPersons~\cite{citypersons} & LoRA train; val eval & $2{,}975$ / $500$ img, $\sim$35k persons & scene \\
     MOT17-02~\cite{mot17}          & LoRA train only & $600$ frames, $1920\times1080$ & sequence window \\
     Human detection                & LoRA train only & positive (person) images & perceptual cluster \\
-    PIPE~\cite{pipe}               & edit pairs; test eval & $888$k / $752$ pairs, $512\times512$ & --- (HF stream) \\
+    PIPE~\cite{pipe}               & edit pairs; test eval & $888$k / $752$ pairs, $512\times512$ & - (HF stream) \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-\subsection{Flow A --- Context--object composite (\textsc{V5})}\label{sec:v5}
+\subsection{Flow A - Context--object composite (\textsc{V5})}\label{sec:v5}
 \textsc{V5} treats the MM-DiT backbone (\cref{sec:backbone}) as a black-box
 img2img candidate generator and places all background-preservation
 logic outside it. The motivating observation is architectural rather than
 empirical: because rectified-flow denoising (\cref{eq:rf}) can in principle move
 any latent token, no prompt or guidance setting guarantees that pixels
-outside the intended object stay fixed --- so \textsc{V5} never asks the model to
+outside the intended object stay fixed - so \textsc{V5} never asks the model to
 preserve them. Instead it generates a candidate, segments only the new
 object, discards the generated background, and composites the object onto the
 untouched source. The original image is the source of truth; generated
@@ -480,7 +532,7 @@ explicit stages:
 \paragraph{Stages.}
 \textbf{(1)~Placement} proposes a valid insertion region from object-specific
 priors (road/sidewalk masks, existing person/vehicle boxes, depth ordering,
-overlap checks) --- placement is a policy, not a prompt, since a realistic
+overlap checks) - placement is a policy, not a prompt, since a realistic
 object in an invalid location still corrupts the dataset.
 \textbf{(2)~Context generation} runs SD3.5 img2img over a local context crop, so
 the model has enough surrounding scene to produce a coherent, correctly-lit
@@ -489,7 +541,7 @@ too much rewrites the scene).
 \textbf{(3)~Segmentation} extracts the new object with YOLOv8m-seg.
 \textbf{(4)~Scale correction} estimates expected pixel height from
 depth/ground-position, resizes the crop and mask together with the contact point
-(feet) anchored, and rejects objects outside a plausible size envelope ---
+(feet) anchored, and rejects objects outside a plausible size envelope -
 geometry, not text, governs scale.
 \textbf{(5)~Compositing} cleans the mask, trims the generated-background fringe,
 applies occlusion rules against foreground persons/vehicles, harmonises
@@ -551,7 +603,7 @@ trusted-background path highlighted.
   \label{fig:v5arch}
 \end{figure}
 
-\subsection{Flow B --- Mask-free edit LoRA + segment-and-paste
+\subsection{Flow B - Mask-free edit LoRA + segment-and-paste
 (\textsc{LoRA})}\label{sec:lora}
 \textsc{LoRA} learns the edit behaviour (where to add a person, at what
 scale and pose, matching the scene) from real before/after pairs, then recovers
@@ -561,24 +613,24 @@ what to generate (learned) and which pixels to keep (enforced by
 construction at paste time).
 
 \paragraph{Conditioning: image-conditioned editing on MM-DiT.}
-The flow follows the InstructPix2Pix~\cite{ip2p} recipe --- condition the
+The flow follows the InstructPix2Pix~\cite{ip2p} recipe - condition the
 denoiser on a source image and a text instruction, supervised on
-(source, target, instruction) triplets --- adapted to SD3.5. Concretely, at each
+(source, target, instruction) triplets - adapted to SD3.5. Concretely, at each
 denoising step the model sees the concatenation
 \begin{equation}\label{eq:lora-cond}
   z_{\text{in}} \;=\; [\,z_t \;\|\; z_{\text{src}}\,]
   \;\in\;\mathbb{R}^{h\times w\times 32},
 \end{equation}
 the noisy target latent $z_t$ stacked channel-wise with the clean source latent
-$z_{\text{src}}$ ($16{+}16$ channels). A trainable \texttt{input\_proj} ---
-a $32\!\to\!16$ projection --- maps this back to the 16-channel width the MM-DiT
+$z_{\text{src}}$ ($16{+}16$ channels). A trainable \texttt{input\_proj} -
+a $32\!\to\!16$ projection - maps this back to the 16-channel width the MM-DiT
 patch embedder expects, so the pretrained backbone is reused unchanged while
 gaining an image-conditioning path. Only the attention LoRA adapters and
 \texttt{input\_proj} are trained; the MM-DiT weights and text encoders stay
 frozen. Training uses IP2P-style classifier-free guidance with independent
 dropout of the text, the image, or both conditions, so that at inference two
-guidance scales --- $s_{\text{text}}$ (instruction adherence) and
-$s_{\text{image}}$ (source adherence) --- can be set independently. Crucially the
+guidance scales - $s_{\text{text}}$ (instruction adherence) and
+$s_{\text{image}}$ (source adherence) - can be set independently. Crucially the
 flow is mask-free: no mask is fed to the model, which decides placement,
 scale, and pose itself; this is the central claim of mask-free editing methods
 and the reason the earlier mask-based variant (whose near-mute mask channel and
@@ -589,7 +641,7 @@ Training requires real ``add an object'' pairs. PIPE~\cite{pipe} supplies them
 through the insight that adding an object is the inverse of
 removing it: a real photo is the target, and an inpainting model erases a
 segmented object to synthesise the source, so the pair is consistent by
-construction outside the edited region --- exactly the property a
+construction outside the edited region - exactly the property a
 background-preserving edit needs, and one IP2P's fully-synthetic triplets do not
 guarantee~\cite{pipe}. The mask-free loader filters strictly on the
 \texttt{Instruction\_Class} field (whole-word person classes; the free-text
@@ -610,7 +662,7 @@ subset is retained (the exact count is logged by the loader at train time).
   \item \textbf{Paste.} The segmented person is composited onto the
         original background at the same coordinates with a feathered alpha
         and Reinhard colour transfer (optional OpenCV Poisson blend). Background
-        outside the person is byte-exact by construction --- a composite,
+        outside the person is byte-exact by construction - a composite,
         not a learned or hard-restore approximation.
 \end{enumerate}
 Inference therefore needs two artifacts together:
@@ -622,9 +674,9 @@ so a paste can read as a sticker; mitigations are to raise $s_{\text{image}}$,
 increase the colour-match strength, or enable Poisson blending. This contrasts
 with unified in-context editors such as FLUX.1 Kontext~\cite{kontext}, which keep
 the edit inside one model pass via sequence concatenation but do not give a
-byte-exact background guarantee --- the property this flow prioritises.
+byte-exact background guarantee - the property this flow prioritises.
 
-\subsection{Flow C --- Training-free insertion (\textsc{Add-it})}\label{sec:addit}
+\subsection{Flow C - Training-free insertion (\textsc{Add-it})}\label{sec:addit}
 \textsc{Add-it} adds an object with no training and no mask, by
 intervening directly in the backbone's attention and latents at inference. It is
 a faithful re-implementation of Add-it~\cite{addit2025} on the SD3.5 MM-DiT
@@ -637,7 +689,7 @@ entirely to the model, which is Add-it's central claim.
 The target image is denoised in parallel with a re-noised copy of the source,
 and the source's keys/values are concatenated into the joint MM-DiT attention so
 target patches can attend to source content~\cite{addit2025}. The three key
-groups --- source, prompt, target --- are weighted, and the balance is set by a
+groups - source, prompt, target - are weighted, and the balance is set by a
 scalar $\gamma$ solved per-run: defining the prompt-token attention mass over the
 source $A_{\text{source}}$ and over the target $A_{\text{target}}$, $\gamma$ is
 the root of
@@ -676,7 +728,7 @@ FLUX as integer timesteps, are expressed as fractions of the $[0,1000]$ schedule
 (equal ratios under SD3.5's FlowMatch-Euler timesteps); (iii)~FLUX layer indices
 for the mask layers map to SD3.5 depth fractions; and (iv)~SD3.5 requires real
 classifier-free guidance with a light negative prompt where FLUX-dev used
-distilled guidance --- the one unavoidable backbone difference. The full
+distilled guidance - the one unavoidable backbone difference. The full
 paper$\to$code map is recorded in \texttt{docs/addit\_paper\_fidelity.md}.
 
 \subsection{Shared metric core}\label{sec:metrics}
@@ -685,12 +737,12 @@ All three flows are evaluated through one dependency-injected metric module
 (\texttt{shared\_metrics.py}; \texttt{numpy}${}+{}$Pillow${}+{}$an injected
 detector callable). The shared set is component-only (no fused score):
 \begin{itemize}[leftmargin=1.4em,itemsep=2pt]
-  \item \textbf{Detection} --- \textsc{person\_detected}, \textsc{person\_confidence}.
-  \item \textbf{Inclusion} --- did a new object appear vs.\ the source?
+  \item \textbf{Detection} - \textsc{person\_detected}, \textsc{person\_confidence}.
+  \item \textbf{Inclusion} - did a new object appear vs.\ the source?
         (detector count delta; the Add-it-paper ``Inclusion'' analogue).
-  \item \textbf{Scale} --- \textsc{scale\_ratio}, \textsc{scale\_error} vs.\ an
+  \item \textbf{Scale} - \textsc{scale\_ratio}, \textsc{scale\_error} vs.\ an
         expected height; \texttt{None} (not a false~1.0) when no prior exists.
-  \item \textbf{Background preservation} --- \bgmae / \bgssim over pixels
+  \item \textbf{Background preservation} - \bgmae / \bgssim over pixels
         outside the object region, where the region is taken from
         (priority order) an explicit mask (LoRA), an explicit bbox (V5), or the
         detector boxes (Add-it).
@@ -732,8 +784,8 @@ eval cases and the seed set.}
 The ablation is a controlled single-variable study: one factor is changed at a
 time while everything else is held at the proposed configuration, so any change in
 the metrics is attributable to that factor alone. \TODO{name the factor(s) actually
-swept --- \eg colour-match on/off, Poisson on/off, the LoRA image-guidance scale
-$s_{\text{image}}$, the LoRA rank, or mask-free vs.\ the older mask-based flow ---
+swept - \eg colour-match on/off, Poisson on/off, the LoRA image-guidance scale
+$s_{\text{image}}$, the LoRA rank, or mask-free vs.\ the older mask-based flow -
 and which is the controlled counterpart.}
 
 % ============================================================================
@@ -774,7 +826,7 @@ the trade-offs; \textbf{bold} the best per column.}
 \Cref{tab:ablation} isolates \TODO{the studied component} with a controlled
 single-variable comparison: only the named factor differs from the proposed
 configuration, so any change in the metrics is attributable to it alone.
-\TODO{read the table in one paragraph once it is filled --- state the direction and
+\TODO{read the table in one paragraph once it is filled - state the direction and
 size of the effect, and whether it trades preservation against inclusion.}
 
 \begin{table}[t]
@@ -804,8 +856,8 @@ MEASURED on this hardware versus indicative references collated from papers/code
 and do not present borrowed numbers as measured.}
 
 \subsection{Qualitative results}\label{sec:qual}
-\Cref{fig:qual} shows contact sheets --- original $\mid$ generated $\mid$
-composite per flow on the same cases, with the source-to-output difference map ---
+\Cref{fig:qual} shows contact sheets - original $\mid$ generated $\mid$
+composite per flow on the same cases, with the source-to-output difference map -
 so the metrics can be read against what they measure. The points to look for are
 boundary sharpness at the paste seam, the sticker-lighting effect in the paste
 flows (the object lit for the generated scene rather than the target), and scale
@@ -846,9 +898,9 @@ to match the final runs.}
 This report studied a background-as-source-of-truth architecture for
 object-insertion augmentation, in which the original image is trusted and generated
 background is discarded, together with a single dependency-injected metric core
-that makes three otherwise incomparable insertion flows --- a composite augmenter,
+that makes three otherwise incomparable insertion flows - a composite augmenter,
 a mask-free edit LoRA with segment-and-paste, and a training-free
-attention-injection inserter --- report the same numbers on the same cases. The
+attention-injection inserter - report the same numbers on the same cases. The
 contribution is therefore as much methodological (comparability) as architectural
 (structural preservation). \TODO{state the headline result and the quantified
 trade-off in one or two sentences once measured.}
@@ -857,7 +909,7 @@ Future work follows the codebase's own generalisation path: rename the
 pedestrian-specific abstractions to \texttt{target\_object}, add open-vocabulary
 detectors so new classes need no bespoke detector, strengthen matting to reduce the
 sticker-lighting artefact, add dataset adapters beyond CityPersons, and, most
-importantly, evaluate downstream --- measure whether a detector trained on the
+importantly, evaluate downstream - measure whether a detector trained on the
 augmented data improves, not only whether the inserted images score well on visual
 metrics.
 
@@ -889,7 +941,7 @@ numbers.}
 \appendix
 \section{Layer-by-layer model specification}\label{app:arch}
 \TODO{Per-flow component spec table (input shape, layers, params) for any
-trained component --- the LoRA adapter + input\_proj. Match the sample's
+trained component - the LoRA adapter + input\_proj. Match the sample's
 appendix Table 7/8 style.}
 
 \section{Training configuration}\label{app:train}
