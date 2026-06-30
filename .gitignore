@@ -20,7 +20,7 @@ Thumbs.db
 
 # Model artifacts / training outputs (keep out of the repo — large binaries)
 *.zip
-*.safetensors
+
 *.pt
 *.ckpt
 run_*/
