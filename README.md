@@ -1,4 +1,4 @@
-# VIN — Pedestrian Data Augmentation & LoRA Toolkit
+# VIN — Data Augmentation Background-Preserving Pedestrian Insertion
 
 Research toolkit built around **Stable Diffusion 3.5 Medium** for generating and
 training on synthetic pedestrian data, with **CityPersons** as the reference
@@ -14,7 +14,7 @@ foundation but serve different goals.
 
 | Path | Flow | Purpose | Status |
 |------|------|---------|--------|
-| `sd35_*.py`, `sd35_run.ipynb`, `sd3.5-…clean.ipynb` | **V5 augmentation** | Insert objects into existing images while preserving the background | Smoke-runnable research baseline |
+| `sd35_*.py`, `sd35_run.ipynb`, `sd3.5-…clean.ipynb` | **Rule-Guided augmentation** | Insert objects into existing images while preserving the background | Smoke-runnable research baseline |
 | `LoRA/` | **LoRA inpaint-edit** | Add an object into a scene (preserve 100% bg, match the vibe). Data ETL → train edit-LoRA on PIPE pairs → infer + eval | **Active focus** |
 | `docs/` | — | Design notes, model selection, workflow diagrams | — |
 | `tests/` | — | Root augmentation tests (`LoRA/tests/` holds the LoRA tests) | — |
@@ -26,7 +26,7 @@ foundation but serve different goals.
 
 ---
 
-## 1. V5 augmentation flow (root)
+## 1. Rule-Guided augmentation flow (root)
 
 Adds new objects to existing images in local scene context, segments only the
 newly generated pixels, corrects scale/placement/occlusion, and composites the
@@ -70,7 +70,7 @@ reports `scale_coverage_rate`.
 
 ## 2. LoRA inpaint-edit flow (`LoRA/`) — active focus
 
-A clean package (no copy of the V5 augmentation flow). Goal: **add an object
+A clean package (no copy of the Rule-Guided augmentation flow). Goal: **add an object
 (person) into many kinds of scenes, preserve 100% of the background, and match
 the photo's vibe.** Background preservation is achieved by hard-restore at
 inference, not learned; the LoRA learns the *edit / vibe-match* behavior from
@@ -157,7 +157,7 @@ VRAM stable.
 
 ## Status
 
-A research toolkit, not a production service. The V5 augmentation flow is a
+A research toolkit, not a production service. The Rule-Guided augmentation flow is a
 smoke-runnable baseline; the **LoRA inpaint-edit flow is the current focus**
 (conditioning + end-to-end run verified; full-train for quality in progress).
 Datasets and trained model artifacts are **not** stored in this repo.
