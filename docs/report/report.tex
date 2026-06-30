@@ -116,13 +116,7 @@
 % ============================================================================
 \begin{abstract}
 \noindent
-This study examines two methods for adding pedestrians to existing images while preserving the original scene for dataset augmentation. The Rule-Guided SD3.5 Pipeline is the primary method. It uses the target scene during generation and applies placement policy, scale correction, grounding checks, occlusion checks, mask and edge filtering, quality gates, and bounded retry before an image is accepted. The secondary LoRA flow generates a person from text, segments that person, and pastes it onto a separate source image. It does not currently use target-scene placement awareness, expected-height scale correction, or a dedicated edge-quality filtering and rejection stage.
-
-The retained archive contains three Rule-Guided smoke summaries covering $150$ generated candidates, a Rule-Guided shared-metric export with $32$ rows, and a LoRA shared-metric export with $100$ rows. Across the Rule-Guided smoke runs, $103/150$ candidates were accepted, giving a weighted acceptance rate of $0.687$. The unweighted mean of the run-level scale scores is $0.957$. The rejection log records concrete safety failures: invalid mask shape accounts for $28/47$ rejected candidates and bad placement accounts for $11/47$.
-
-The two shared-metric exports are not paired: they do not use the same source cases, generated candidates, or retained effective-support masks. Their raw values are therefore descriptive only and are not used as a direct statistical benchmark. The LoRA CSV confirms background similarity and detector-count outcomes under its own convention, but it contains no valid scale measurement because expected height is zero and scale fields are empty. It also cannot establish scene-aware placement, grounding, occlusion handling, or accepted-output quality.
-
-The report concludes that the Rule-Guided SD3.5 Pipeline is the stronger method for the project objective: controlled pedestrian augmentation. It is selected as the primary production flow because it combines scene context with measurable acceptance, rejection, scale, placement, and compositing controls. LoRA remains a useful secondary appearance-generation baseline. Future work will add placement awareness, scale correction, and dedicated edge filtering to the LoRA path, then evaluate both flows on the same frozen scenes with target-specific metrics and blinded manual review.
+This report presents a background-preserving pedestrian augmentation system based on Stable Diffusion 3.5. Two flows are studied: the Rule-Guided SD3.5 Pipeline, used as the main augmentation flow, and a concept LoRA segment-and-paste flow, used as a secondary appearance-generation baseline. The Rule-Guided pipeline generates a pedestrian using target-scene context and applies placement control, expected-height scale correction, grounding and occlusion checks, mask and edge filtering, quality gates, and bounded retry before accepting an output. Across three retained smoke runs, it accepted 103 of 150 generated candidates, giving a weighted acceptance rate of 0.687 and an unweighted mean scale score of 0.957. The rejection log showed that invalid mask geometry and poor placement were the main causes of failure, accounting for 28 and 11 of 47 rejected candidates, respectively. The LoRA flow achieved favourable raw detector-count and background-preservation values, but its current implementation does not use target-scene placement awareness, expected-height scale correction, grounding validation, or a dedicated edge-quality rejection stage. Because the two exported shared-metric files use different source cases and mask conventions, they are treated as descriptive rather than as a direct statistical comparison. The results support Rule-Guided SD3.5 Pipeline as the stronger method for the project objective of controlled pedestrian augmentation, while LoRA remains a useful secondary baseline and a target for future upgrades in placement awareness, scale correction, and edge-quality validation.
 \end{abstract}
 
 \vspace{0.65em}
@@ -351,7 +345,7 @@ integrates the corresponding ODE with a FlowMatch-Euler scheduler.
     \node[genbox, below=of p]   (te)  {Text encoders:\\CLIP-G, CLIP-L, T5-XXL\\$\to$ text \& negative embeddings};
     \node[genbox, below=of src] (vae) {VAE encoder\\$\to$ 16-channel latent\\$\to$ add Gaussian noise};
     \coordinate (mid) at ($(te)!0.5!(vae)$);
-    \node[genbox,  below=10mm of mid] (sch)  {Flow-matching scheduler};
+    \node[genbox,  below=15mm of mid] (sch)  {Flow-matching scheduler};
     \node[compbox, below=of sch]      (dit)  {MM-DiT-X stack (24--38 blocks)\\per block: adaLN $\to$ joint\\attention $\to$ FFN; CFG};
     \node[compbox, below=of dit]      (vel)  {Predicted velocity\\$\to$ scheduler update};
     \node[decbox,  below=of vel]      (more) {More\\steps?};
@@ -373,6 +367,8 @@ integrates the corresponding ODE with a FlowMatch-Euler scheduler.
     \draw[flowarr] (more.east) to[out=0,in=0]
           node[right,font=\footnotesize]{yes} (dit.east);
   \end{tikzpicture}
+ 
+ 
   \caption[Generation flow]{The SD3.5 generation flow used inside the
   context/candidate generation step of every flow (re-drawn from
   \texttt{docs/diagram.md}). Text conditioning (the three encoders; T5-XXL
@@ -382,7 +378,7 @@ integrates the corresponding ODE with a FlowMatch-Euler scheduler.
   - the point at which background-as-source-of-truth begins.}
   \label{fig:genflow}
 \end{figure}
-
+\newpage
 \subsection{Dataset and split protocol}\label{sec:dataset}
 The repository contains a broader data-engineering design than the saved experiment
 archive. To avoid conflating a candidate source with data proven to have
@@ -500,7 +496,7 @@ The Rule-Guided SD3.5 Pipeline exposes tuning controls so that a failed candidat
 
 \begin{table}[t]
   \centering
-  \caption[Rule-guided tuning functions]{\textbf{Rule-guided tuning functions.} Each function changes a defined part of the pipeline and is linked to a recorded failure type. Exact values must be saved in the run configuration.}
+  \caption[Rule-guided tuning functions]{{Rule-guided tuning functions:} Each function changes a defined part of the pipeline and is linked to a recorded failure type. Exact values must be saved in the run configuration.}
   \label{tab:tuning-functions}
   \scriptsize
   \begin{tabular}{@{}p{2.25cm}p{3.05cm}p{3.15cm}p{1.15cm}@{}}
@@ -615,7 +611,7 @@ The two flows share a final compositing idea but produce different types of outp
 
 \begin{table}[t]
   \centering
-  \caption[Two output types]{\textbf{Two image types produced by the study.} The outputs are stored and interpreted separately because their generation inputs, controls, and validation rules are different.}
+  \caption[Two output types]{{Two image types produced by the study:} The outputs are stored and interpreted separately because their generation inputs, controls, and validation rules are different.}
   \label{tab:two-output-types}
   \scriptsize
   \begin{tabular}{@{}p{2.5cm}p{2.7cm}p{3.1cm}p{2.15cm}@{}}
@@ -704,7 +700,7 @@ The supplied shared-metric files do not support a paired performance claim. The 
 
 \begin{table}[t]
   \centering
-  \caption[Descriptive shared-metric exports]{\textbf{Descriptive shared-metric exports from the supplied CSV files.} The numbers are retained for transparency but cannot rank the two flows because the runs are unpaired and the effective-support-mask convention is not shared.}
+  \caption[Descriptive shared-metric exports]{{Descriptive shared-metric exports from the supplied CSV files:} The numbers are retained for transparency but cannot rank the two flows because the runs are unpaired and the effective-support-mask convention is not shared.}
   \label{tab:raw-shared-comparison}
   \scriptsize
   \begin{tabular}{@{}p{2.85cm}p{2.1cm}p{2.1cm}p{3.35cm}@{}}
@@ -730,7 +726,7 @@ LoRA background values are low on average under its own exported support convent
 
 \begin{table}[t]
   \centering
-  \caption[Audited LoRA shared metrics]{\textbf{LoRA metric audit.} The audit keeps uncertainty and failure counts visible and identifies the missing controls that prevent the current LoRA path from serving as the main controlled-augmentation flow.}
+  \caption[Audited LoRA shared metrics]{{LoRA metric audit:} The audit keeps uncertainty and failure counts visible and identifies the missing controls that prevent the current LoRA path from serving as the main controlled-augmentation flow.}
   \label{tab:lora-audit}
   \scriptsize
   \begin{tabular}{@{}p{2.55cm}p{3.6cm}p{3.55cm}@{}}
@@ -828,7 +824,7 @@ The current LoRA path is weaker for controlled augmentation because it creates a
 
 \begin{table}[t]
   \centering
-  \caption[Task-readiness decision]{\textbf{Task-readiness decision.} Rule-Guided SD3.5 Pipeline is the main flow because it covers the controls required for safe scene-aware pedestrian augmentation.}
+  \caption[Task-readiness decision]{{Task-readiness decision:} Rule-Guided SD3.5 Pipeline is the main flow because it covers the controls required for safe scene-aware pedestrian augmentation.}
   \label{tab:method-decision}
   \scriptsize
   \begin{tabular}{@{}p{3.0cm}p{2.9cm}p{2.9cm}p{1.1cm}@{}}
