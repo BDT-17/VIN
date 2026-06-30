@@ -116,7 +116,7 @@
 % ============================================================================
 \begin{abstract}
 \noindent
-This report presents a background-preserving pedestrian augmentation system based on Stable Diffusion 3.5. Two flows are studied: the Rule-Guided SD3.5 Pipeline, used as the main augmentation flow, and a concept LoRA segment-and-paste flow, used as a secondary appearance-generation baseline. The Rule-Guided pipeline generates a pedestrian using target-scene context and applies placement control, expected-height scale correction, grounding and occlusion checks, mask and edge filtering, quality gates, and bounded retry before accepting an output. Across three retained smoke runs, it accepted 103 of 150 generated candidates, giving a weighted acceptance rate of 0.687 and an unweighted mean scale score of 0.957. The rejection log showed that invalid mask geometry and poor placement were the main causes of failure, accounting for 28 and 11 of 47 rejected candidates, respectively. The LoRA flow achieved favourable raw detector-count and background-preservation values, but its current implementation does not use target-scene placement awareness, expected-height scale correction, grounding validation, or a dedicated edge-quality rejection stage. Because the two exported shared-metric files use different source cases and mask conventions, they are treated as descriptive rather than as a direct statistical comparison. The results support Rule-Guided SD3.5 Pipeline as the stronger method for the project objective of controlled pedestrian augmentation, while LoRA remains a useful secondary baseline and a target for future upgrades in placement awareness, scale correction, and edge-quality validation.
+This report presents a background-preserving pedestrian augmentation system based on Stable Diffusion 3.5. Two flows are studied: the Rule-Guided SD3.5 Pipeline, used as the primary controlled-augmentation flow, and a concept LoRA segment-and-paste flow, used as a secondary appearance-generation baseline. Rule-Guided uses target-scene context and applies placement control, expected-height scale correction, grounding and occlusion checks, mask and edge filtering, quality gates, and bounded retry before accepting an output. Across three retained smoke runs, it accepted 103 of 150 generated candidates, giving a weighted acceptance rate of 0.687 and an unweighted mean scale score of 0.957. The rejection log identified invalid mask geometry and poor placement as the main recorded failure causes, accounting for 28 and 11 of 47 rejected candidates, respectively. The LoRA flow achieved favourable raw detector-count and background-preservation values, but its current implementation does not use target-scene placement awareness, expected-height scale correction, grounding validation, or a dedicated edge-quality rejection stage. The two available shared-metric exports use different source cases and effective-support-mask conventions; they are therefore descriptive only and are not a direct benchmark. Under current evidence, Rule-Guided is the more production-ready controlled-augmentation flow because it provides the scene-aware acceptance, rejection, and tuning controls required for dataset production. A future paired evaluation on common frozen scenes will add target-specific detection-overlap metrics, valid scale error, and blinded manual review before any cross-flow quality ranking is claimed.
 \end{abstract}
 
 \vspace{0.65em}
@@ -427,7 +427,7 @@ benchmark.
     \bottomrule
   \end{tabular}
 \end{table}
-\subsection{Recommended paired smoke-test protocol}\label{sec:smoke-plan}
+\subsection{Future paired smoke-test protocol}\label{sec:smoke-plan}
 A future controlled smoke test should use four source sets with ten source images per set, giving $40$ source scenes. Each scene can receive up to five candidate attempts, yielding a planned budget of
 \begin{equation}
   4\ \text{source sets}\times 10\ \text{images per set}\times 5\ \text{attempts per image}=200\ \text{candidate attempts}.
@@ -638,8 +638,14 @@ according to what it actually measures:
   \item Inclusion. \textsc{inclusion\_count\_delta} equals output person
         count minus source person count. In the supplied LoRA CSV,
         \textsc{object\_added} is exactly $\mathbb{1}[\Delta n>0]$ for every row.
-        This is a useful proxy, but it should ultimately be replaced or augmented
-        by target-mask / target-box overlap.
+        This is a useful proxy only; it does not prove that the detector found the inserted target.
+  \item Target-specific detection overlap. Let $B_{\mathrm{ins}}$ be the final inserted-object
+        box derived from the saved insertion mask and let $\mathcal{D}$ be the person detections
+        in the final composite. Define $\mathrm{target\_detected}=1$ when at least one
+        $d\in\mathcal{D}$ has confidence at least $\tau=0.25$ and
+        $\mathrm{IoU}(B_d,B_{\mathrm{ins}})\ge0.50$. The companion values are the maximum
+        overlapping detector confidence and $\max_{d\in\mathcal{D}}\mathrm{IoU}(B_d,B_{\mathrm{ins}})$.
+        These fields are specified for the paired evaluation but are not present in the retained CSVs.
   \item Scale. \textsc{scale\_ratio} and \textsc{scale\_error} require
         a non-zero expected-height prior. A missing prior must remain missing; it
         must not be encoded as a perfect score.
@@ -662,7 +668,8 @@ according to what it actually measures:
     Metric & Interpretation & Direction \\
     \midrule
     \textsc{person\_detected} / \textsc{person\_confidence} & Any person detected in output; not target-specific in multi-person scenes. & higher \\
-    \textsc{object\_added} / \textsc{inclusion\_count\_delta} & Detector-count evidence for a new person relative to source; needs target-overlap confirmation. & higher \\
+    \textsc{object\_added} / \textsc{inclusion\_count\_delta} & Detector-count evidence for a new person relative to source; not target-specific. & higher \\
+    \textsc{target\_detected} / \textsc{target\_box\_IoU} & Detection overlap with the saved inserted mask or box; required for a paired benchmark. & higher \\
     \textsc{scale\_ratio} / \textsc{scale\_error} & Detected versus expected height, only when expected height is non-zero. & ratio neutral; error lower \\
     \bgmae / \bgssim & Difference outside a common $M_{\mathrm{eff}}$ support convention. & MAE lower; SSIM higher \\
     \bottomrule
@@ -670,11 +677,7 @@ according to what it actually measures:
 \end{table}
 
 \subsection{Evaluation protocol and LoRA audit}\label{sec:protocol}
-A valid paired comparison would require the same frozen source cases, prompts,
-seeds, detector version and threshold, common effective-support masks, and common
-output format for both flows. The supplied archive does not contain those matched
-rule-guided per-case metrics. It instead contains three rule-guided smoke summaries
-and one $N=100$ LoRA shared-metric CSV. The report first reports the raw shared metrics as they are exported. It then makes a separate operational method-selection decision based on the controls required for safe pedestrian insertion. It does not claim an unpaired cross-flow effect size for background or inclusion metrics.
+A direct benchmark is not available in the retained archive. A valid paired evaluation is future work and must run both flows on the same frozen source cases, target prompts, seeds where supported, detector version and threshold, output resolution, and effective-support-mask convention. Each final output must also save its insertion mask, insertion box, detector boxes, and detector confidences so that target-specific detection overlap can be measured. The current archive instead contains three Rule-Guided smoke summaries and one $N=100$ LoRA shared-metric CSV. Table~\ref{tab:raw-shared-comparison} is therefore a descriptive audit of separate exports, not a direct benchmark and not a statistical ranking.
 
 The LoRA CSV was audited programmatically before aggregation. It contains $100$
 rows, all labelled \texttt{lora}, with $100$ unique \textsc{case\_id} values and
@@ -695,12 +698,12 @@ remain required for a fully reproducible benchmark.
 % ============================================================================
 \section{Results and Discussion}\label{sec:results}
 
-\subsection{Descriptive shared-metric exports}\label{sec:rawmetrics}
-The supplied shared-metric files do not support a paired performance claim. The Rule-Guided file contains $32$ rows with $31$ unique case IDs and $32$ unique case--seed pairs. The LoRA file contains $100$ unique case IDs and $100$ unique case--seed pairs. The source scenes, output provenance, candidate attempts, and effective-support masks are not matched. The values below are reported for transparency, but they are not the decision criterion for the primary method because they omit the controls that define a usable scene-aware augmentation output.
+\subsection{Unpaired descriptive metric exports (not a benchmark)}\label{sec:rawmetrics}
+The supplied shared-metric files are unpaired and are not a direct benchmark. The Rule-Guided file contains $32$ rows with $31$ unique case IDs and $32$ unique case--seed pairs. The LoRA file contains $100$ unique case IDs and $100$ unique case--seed pairs. The source scenes, output provenance, candidate attempts, and effective-support masks are not matched. The values below are reported for transparency, but they are not the decision criterion for the primary method because they omit the controls that define a usable scene-aware augmentation output.
 
 \begin{table}[t]
   \centering
-  \caption[Descriptive shared-metric exports]{{Descriptive shared-metric exports from the supplied CSV files:} The numbers are retained for transparency but cannot rank the two flows because the runs are unpaired and the effective-support-mask convention is not shared.}
+  \caption[Unpaired descriptive metric exports]{Unpaired descriptive metric exports from separate CSV files. This table is not a direct benchmark: the flows use different source cases, output provenance, and effective-support-mask conventions.}
   \label{tab:raw-shared-comparison}
   \scriptsize
   \begin{tabular}{@{}p{2.85cm}p{2.1cm}p{2.1cm}p{3.35cm}@{}}
@@ -717,7 +720,7 @@ The supplied shared-metric files do not support a paired performance claim. The 
   \end{tabular}
 \end{table}
 
-The descriptive table shows that LoRA has favourable values in its own detector-count and background columns. These values are not sufficient to make LoRA the main controlled-augmentation method. They do not measure whether the new pedestrian was placed in a safe region, has an expected height, contacts the ground, respects occlusion, or passes edge-quality rejection. In addition, the two exports use different cases and lack a common effective-support-mask convention. The project therefore evaluates primary-flow suitability using the operational controls and accepted-output evidence reported in \cref{sec:ablation,sec:decision}.
+The descriptive table shows that LoRA has favourable values in its own detector-count and background columns. These values are not sufficient to make LoRA the main controlled-augmentation method, and Table~\ref{tab:raw-shared-comparison} must not be read as a benchmark. They do not measure whether the detector overlaps the inserted person, whether the person was placed in a safe region, has an expected height, contacts the ground, respects occlusion, or passes edge-quality rejection. The next paired evaluation will report \textsc{target\_detected}, \textsc{target\_box\_IoU}, and target confidence from the saved insertion mask or box, alongside scale, placement, and acceptance metrics. Until then, primary-flow selection is an operational readiness decision, not a claim of superior benchmark performance.
 
 \subsubsection*{LoRA metric audit}
 The LoRA CSV was audited rather than reported from its mean values alone. It contains $100$ rows, $100$ unique cases, and $100$ unique seeds. Object addition is $69/100=0.690$ with a 95\% Wilson interval $[0.594,0.772]$. Mean inclusion-count delta is $0.720$; the split is $69$ positive, $23$ zero, and $8$ negative rows. The $98/100$ person-detection rate is not target-specific because source pedestrians can keep the detector positive when no new pedestrian is added.
@@ -817,8 +820,8 @@ S_{i,r}=\frac{1}{6}\sum_{k=1}^{6}s_{i,r,k}, \qquad s_{i,r,k}\in\{1,2,3,4,5\}.
 \end{equation}
 The future report should provide the method-level mean, augmentation-ready rate, paired source-scene win/tie/loss counts, a paired Wilcoxon test, and reviewer agreement for the binary ready label using Fleiss' $\kappa$. This review will test whether the operational advantages of Rule-Guided also produce a human-visible quality advantage.
 
-\subsection{Operational decision: Rule-Guided SD3.5 Pipeline is the stronger main flow}\label{sec:decision}
-The primary outcome of this project is not merely a person-like crop or a low background difference. It is a controlled training image: the inserted pedestrian must be plausible in the target scene, have an acceptable scale, contact the ground, respect occlusion, have a clean boundary, and be recorded as accepted only after safety checks pass. Under this task definition, Rule-Guided SD3.5 Pipeline is the stronger and more complete method.
+\subsection{Operational decision: Rule-Guided SD3.5 Pipeline is more production-ready under current evidence}\label{sec:decision}
+The primary outcome of this project is not merely a person-like crop or a low background difference. It is a controlled training image: the inserted pedestrian must be plausible in the target scene, have an acceptable scale, contact the ground, respect occlusion, have a clean boundary, and be recorded as accepted only after safety checks pass. Under this task definition, Rule-Guided SD3.5 Pipeline is the more production-ready controlled-augmentation flow under current evidence.
 
 The current LoRA path is weaker for controlled augmentation because it creates a person without target-scene context, then pastes the person into a separate scene. It has no implemented target-scene placement awareness, no expected-height scale correction, no ground-contact correction, and no dedicated edge-quality filtering or rejection stage. Basic mask erosion and feathering reduce some visible seams, but they do not replace an edge-quality gate that can reject unsafe composites. These missing capabilities are formalised as future work in \cref{sec:futurework}.
 
@@ -843,7 +846,7 @@ The current LoRA path is weaker for controlled augmentation because it creates a
 \end{table}
 
 \begin{quote}
-``Final operating decision: Rule-Guided SD3.5 Pipeline is the main method for controlled pedestrian augmentation. The current LoRA path is a secondary appearance-generation baseline. Rule-Guided is stronger for the project objective because it uses target-scene context and implements placement awareness, scale correction, grounding and occlusion checks, edge filtering, quality gates, rejection logging, tuning controls, and bounded retry. LoRA requires these additions before it can be considered a complete controlled-augmentation flow.''
+``Final operating decision: Rule-Guided SD3.5 Pipeline is the main method for controlled pedestrian augmentation. The current LoRA path is a secondary appearance-generation baseline. Rule-Guided is more production-ready for the project objective under current evidence because it uses target-scene context and implements placement awareness, scale correction, grounding and occlusion checks, edge filtering, quality gates, rejection logging, tuning controls, and bounded retry. LoRA requires these additions before it can be considered a complete controlled-augmentation flow.''
 \end{quote}
 
 The saved Rule-Guided summaries support this decision. Across three smoke runs, the pipeline generated $150$ candidates, accepted $103$, and rejected $47$; the weighted acceptance rate is $0.687$ with a 95\% Wilson interval $[0.609,0.755]$. The mean scale score is $0.957$ across the three run-level means. Rejection is informative: invalid mask shape accounts for $28/47$ rejects and bad placement for $11/47$. These failure labels drive the tuning functions in \cref{tab:tuning-functions}. A dataset-production pipeline should reject unsafe samples rather than treat every detector-visible person as a valid training example.
@@ -855,7 +858,7 @@ The future goal is not to remove LoRA, but to turn it from a prompt-only appeara
   \item Scale correction. Estimate an expected target height from the target scene, resize the generated person and mask together, and anchor the feet to the predicted ground contact point.
   \item Grounding and occlusion checks. Reject floating persons, impossible depth order, and invalid overlap with foreground people or vehicles.
   \item Dedicated edge filtering. Add boundary/halo measurements, mask-shape checks, edge-seam rejection, and retry rather than relying only on basic erosion, feathering, or colour transfer.
-  \item Paired evaluation. Run both flows on the same frozen source images, target prompts, detector settings, output format, and effective-support-mask convention; report target-specific inclusion, scale error, placement quality, edge quality, time per accepted image, and downstream detector benefit.
+  \item Paired evaluation. Run both flows on the same frozen source images, target prompts, detector settings, output format, and effective-support-mask convention. Save the insertion mask and box for every output, then report target-specific detection overlap, target confidence, valid scale error, placement quality, edge quality, time per accepted image, and downstream detector benefit.
 \end{enumerate}
 \subsection{Compute accounting: evidence gap}\label{sec:efficiency}
 The archive supports only a qualitative implementation-cost description, not a
@@ -897,26 +900,12 @@ sharpness, sticker-lighting, and local scale plausibility. They reinforce the ro
 \end{figure}
 
 \subsection{Discussion}\label{sec:discussion}
-The report separates descriptive pixel and detector-count exports from the main controlled-augmentation decision. The current LoRA CSV has favourable background and detector-count values under its own export convention. These values are not ignored. However, they cannot answer the central dataset-production question: whether a generated pedestrian is correctly placed, correctly scaled, grounded on the scene, consistent with foreground occlusion, and clean enough at the boundary to become a safe training example.
+The available evidence separates two questions. The current LoRA export has favourable detector-count and background values under its own convention, but those values are not target-specific and cannot rank two unpaired flows. Rule-Guided is selected for the present dataset-production workflow because it implements target-scene placement, expected-height scale correction, grounding and occlusion checks, edge filtering, acceptance logging, and bounded retry. The retained $103/150$ accepted-candidate result and rejection histogram show that these controls are active, but they do not establish a universal visual-quality advantage.
 
-Rule-Guided SD3.5 Pipeline is stronger for this task because it turns those requirements into explicit stages. It observes target-scene context, proposes a placement region, corrects scale with an expected-height prior, anchors the feet, checks occlusion, cleans and filters the mask edge, applies a quality gate, records rejection reasons, and retries under a bounded budget. The retained result of $103/150$ accepted candidates, mean run-level scale score $0.957$, and rejection histogram provides operational evidence that these controls are active.
-
-Current LoRA is weaker for controlled augmentation because it generates a person before seeing the target scene. Its exported run cannot measure scale because expected height is zero in every row. It has no target-scene placement policy and no dedicated edge-quality filtering or rejection log. These are not minor presentation details; they are the controls that determine whether a pasted person can be trusted as a labelled training instance. The future-work plan in \cref{sec:futurework} specifies how to close this gap.
-
-The next paired $40$-scene, $200$-candidate protocol should make the decision testable under identical conditions. The same frozen scenes, prompt variants, mask convention, detector version, threshold, and output format must be used for both flows. The report should then compare target-specific inclusion, scale error, placement score, grounding success, occlusion correctness, edge quality, background change, time per accepted image, retries, and downstream detector benefit.
 \section{Conclusion and Perspective}\label{sec:conclusion}
-This study documents two distinct methods for creating pedestrian training images while preserving the source background. Rule-Guided SD3.5 Pipeline generates a candidate with target-scene context and retains the output only after placement, scale, grounding, occlusion, mask and edge, and quality checks. The current LoRA flow generates a person from text and pastes that person onto a source image without target-scene placement awareness, expected-height scale correction, or a dedicated edge-quality filtering and rejection stage. The two outputs are therefore different products and are reported separately.
+This study identifies Rule-Guided SD3.5 Pipeline as the more production-ready controlled-augmentation flow under current evidence. It is selected because it provides scene-aware acceptance and rejection controls required to create controlled pedestrian training images. The current LoRA path remains a useful appearance-generation baseline, but it lacks target-scene placement awareness, valid expected-height scale measurement, and a dedicated edge-quality rejection stage.
 
-The retained Rule-Guided smoke evidence consists of $150$ generated candidates across cityperson\allowbreak\_nguyena, cityperson\allowbreak\_bg\allowbreak\_yolo, and \texttt{MOT17}. It accepts $103$ candidates, for a weighted acceptance rate of $0.687$, and reports an unweighted mean run-level scale score of $0.957$. The rejection log records $28/47$ invalid-mask-shape failures and $11/47$ bad-placement failures. These records show that the main flow does not simply generate and save images: it identifies unsafe candidates, records why they fail, and uses the result to guide tuning.
-
-The LoRA shared-metric file contains useful descriptive values for detector-count change and background similarity, but it does not establish controlled scene integration. The file has no valid scale measurement, and the current flow does not implement target-scene placement awareness or a dedicated edge-quality filtering stage. Therefore, LoRA is not selected as the main pipeline for this project. It remains useful as a secondary appearance-generation baseline and as the starting point for the future upgrades in \cref{sec:futurework}.
-
-\subsection*{Final conclusion}
-\begin{quote}
-``Rule-Guided SD3.5 Pipeline is the stronger method for the current project because the project requires controlled pedestrian augmentation, not only pedestrian appearance generation. It uses the target scene and applies placement awareness, scale correction, grounding and occlusion checks, edge filtering, quality gates, rejection logging, tuning, and bounded retry. Current LoRA lacks these controls, so it is retained as a secondary baseline and future-work path rather than the primary production flow.''
-\end{quote}
-
-The next step is a paired four-source-set protocol with common frozen scenes and a blinded manual review. The most important future work is to add scene-aware placement, expected-height scale correction, grounding and occlusion validation, and dedicated edge filtering to LoRA, then compare the upgraded LoRA and Rule-Guided flows under one shared metric and output convention.
+The shared CSV values are descriptive only, not a direct benchmark. A future paired evaluation will run both flows on common frozen scenes and will report target-specific detection overlap with the saved inserted mask or box, valid scale error, placement and grounding outcomes, background change under one effective-support convention, runtime per accepted output, and blinded manual review. Until that experiment is completed, the appropriate claim is operational readiness rather than cross-flow superiority.
 
 \section*{Reproducibility}
 The report source identifies the following artifacts: the LoRA configuration files
@@ -935,6 +924,9 @@ cityperson\allowbreak\_nguyena, cityperson\allowbreak\_bg\allowbreak\_yolo, and
 \texttt{MOT17}, respectively. Research autotune is intended to remain in
 \texttt{dry\_run} so parameters do not change silently.
 
+
+For the future paired benchmark, each run must also write a machine-readable \texttt{run\_manifest.json} containing the Git commit, base-model revision, adapter hash, package versions, resolved configuration hash, dataset release and split hashes, source-case identifiers, seed list, detector model and threshold, effective-support-mask path and hash, insertion mask and box, output hash, and timing/VRAM records. This manifest is required to reproduce both automatic metrics and target-specific overlap calculations.
+
 Several items required for full regeneration are not retained in the supplied
 archive and are therefore not claimed: the exact Git commit, immutable resolved
 training command, package versions, base-model revision, complete dataset release
@@ -945,7 +937,7 @@ configuration, training script, and final adapter.
 % ============================================================================
 
 
-The $40$-source / $200$-candidate protocol is a future validation budget and is not reported as observed data. This report uses the retained $150$ Rule-Guided candidate summaries, $32$ Rule-Guided shared-metric rows, and $100$ LoRA shared-metric rows exactly as supplied. No blinded manual-review data were supplied. The primary-flow decision is therefore an evidence-based operational decision for controlled augmentation, while a paired human-quality superiority claim remains future work.
+The $40$-source / $200$-candidate protocol is future work, not observed data. This report uses the retained $150$ Rule-Guided candidate summaries, $32$ Rule-Guided shared-metric rows, and $100$ LoRA shared-metric rows exactly as supplied. No paired target-specific evaluation or blinded manual-review result is claimed.
 \begin{thebibliography}{99}
 \bibitem{citypersons}
 S. Zhang, R. Benenson, and B. Schiele, ``CityPersons: A diverse dataset for pedestrian detection,'' in \emph{Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition}, 2017.
